@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/ARCHITECTURE.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.0
+  VERSION : 2.3.1
   WHAT    : Maintainer's map of the package: what each file does, how a job
             flows through them, how Stop, Pause and Combat Hold work, where
             every setting is used, and recipes for common changes.

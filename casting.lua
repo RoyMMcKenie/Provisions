@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.0
-  CHANGES     : 2.3.0  detect now also fills casting.choices: the food and
+  VERSION     : 2.3.1
+  CHANGES     : 2.3.1  No change in this file.
+                2.3.0  detect now also fills casting.choices: the food and
                        drink spells from the candidate lists that are
                        scribed in this character's book, best first. The
                        window's spell drop downs list them. inBook is now

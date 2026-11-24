@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.0
-  CHANGES     : 2.3.0  No change in this file.
+  VERSION     : 2.3.1
+  CHANGES     : 2.3.1  Removed real character names from a comment.
+                2.3.0  No change in this file.
                 2.2.0  Adds ensureLink: when the chosen link plugin is not
                        loaded on the caster it is loaded with the documented
                        /plugin <name> load (which also adds it to
@@ -584,7 +585,7 @@ end
           which is exactly what broke the first live test (a VPN had moved
           DanNet onto the wrong network interface).
   WHERE : delivery.probe.
-  HOW   : DanNet.Peers is a | separated list such as "mosswyn|technology|".
+  HOW   : DanNet.Peers is a | separated list such as "cleric|tank|".
           Each piece is compared without regard to case.
   WHEN  : Link checks and Top up planning.
 ----------------------------------------------------------------------------]]

@@ -2,8 +2,9 @@
 =============================================================================
   FILE        : provisions/dev/doc_audit.py
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.0
-  CHANGES     : 2.3.0  No change in this file.
+  VERSION     : 2.3.1
+  CHANGES     : 2.3.1  No change in this file.
+                2.3.0  No change in this file.
                 2.2.0  No change in this file.
                 2.1.0  No change in this file.
                 2.0.0  Renamed for the Provisions package. The header check

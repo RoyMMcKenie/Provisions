@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.0
-  CHANGES     : 2.3.0  The Food spell and Drink spell override boxes are now
+  VERSION     : 2.3.1
+  CHANGES     : 2.3.1  No change in this file.
+                2.3.0  The Food spell and Drink spell override boxes are now
                        drop downs (spellPicker). They list "Type your own..."
                        at the top, then "Auto" with the best detected spell,
                        then every known food or drink summon spell scribed

@@ -2,8 +2,9 @@
 =============================================================================
   FILE        : provisions/dev/smoke_test.py
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.0
-  CHANGES     : 2.3.0  Adds a fake ImGui so the window code really runs:
+  VERSION     : 2.3.1
+  CHANGES     : 2.3.1  No change in this file.
+                2.3.0  Adds a fake ImGui so the window code really runs:
                        every scenario now draws the window on each delay.
                        Controls return their current value, so nothing
                        changes unless a scenario says so. New scenario

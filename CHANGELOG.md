@@ -11,6 +11,13 @@
 
 # Changelog
 
+## 2.3.1 (2026-11-24)
+
+Documentation only, before the RedGuides release. No change in behaviour.
+
+- Removed real character names from a code comment in delivery.lua and a
+  VPN product name from the 2.1.0 notes.
+
 ## 2.3.0 (2026-11-24)
 
 The spell override boxes are now drop downs.
@@ -72,7 +79,7 @@ the link before it spends any mana.
 Why
 
 - In the first live test the receiver never pressed Trade. DanNet on one
-  box had picked the ProtonVPN network interface, so the two boxes could
+  box had picked a VPN network interface, so the two boxes could
   not see each other, and the only sign was three timeouts per member
   after all the summoning was done.
 
