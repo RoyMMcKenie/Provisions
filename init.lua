@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/init.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  The link plugin is now loaded automatically. tick
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  No change in this file.
+                2.2.0  The link plugin is now loaded automatically. tick
                        handles the new linkLoadRequested flag (set when a
                        link is picked in Options, and once at startup) with
                        loadLinkNow. linkCheck loads the plugin on the caster

@@ -2,8 +2,15 @@
 =============================================================================
   FILE        : provisions/dev/smoke_test.py
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  The fake /plugin <name> load command loads a plugin
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  Adds a fake ImGui so the window code really runs:
+                       every scenario now draws the window on each delay.
+                       Controls return their current value, so nothing
+                       changes unless a scenario says so. New scenario
+                       window: picks "Type your own..." in the Food spell
+                       drop down, types Summon Food, then a full hand out
+                       must still work. 15 scenarios.
+                2.2.0  The fake /plugin <name> load command loads a plugin
                        on the caster (except in nocaster, where loading
                        fails), and /dex <peer> /plugin MQRemote load gives
                        that fake box MQRemote (except Wiz in nolink, who
@@ -81,6 +88,9 @@
             dannet     the old DanNet link, peers list includes both
             check      Check links only (no hand out); Tank carries 5 bread
                        and 3 water, both boxes answer, nothing is cast
+            window     the operator picks "Type your own..." in the Food
+                       spell drop down and types Summon Food; the setting
+                       is saved and the hand out works as normal
 
   WHEN  : After any change to logic in init, casting, delivery or core.
 
@@ -237,7 +247,7 @@ local mq = { TLO = TLO, configDir = CONFIG_DIR,
   gettime = function() now = now + 50 tick() return now end,
   pickle = function() end, unbind = function() end,
   bind = function(name, fn) G.binds[name] = fn end,   -- keep /prov for pong replies
-  imgui = { init = function() end },
+  imgui = { init = function(_, fn) G.render = fn end },   -- keep ui.render to draw frames
   event = function(n, _, cb) evs[n] = cb end,
   unevent = function(n) evs[n] = nil end,
   doevents = function()                    -- fire queued chat events
@@ -257,7 +267,11 @@ local function deliver()
   end
 end
 -- A delay with a condition moves 10 ms and returns; callers check again.
-function mq.delay(ms, cond) deliver() now = now + (cond and 10 or ms) tick() end
+function mq.delay(ms, cond)
+  deliver()
+  if G.render then G.render() end                                  -- draw one window frame
+  now = now + (cond and 10 or ms) tick()
+end
 
 -- Fake boxes. ids match the group list; nolink takes MQRemote off Wiz.
 local BOX_ID = { Tank = 2, Wiz = 3 }
@@ -357,8 +371,33 @@ function mq.cmd(c)
   end
 end
 package.loaded['mq'] = mq
-package.loaded['ImGui'] = {}                                      -- window is not drawn
+-- Fake ImGui. Begin, CollapsingHeader, BeginTable and BeginCombo say
+-- "open", so every control is drawn. Checkbox, InputInt and InputText
+-- return the value they were given (no change). In the window scenario,
+-- Selectable reports a click on "Type your own..." and the typed box
+-- returns "Summon Food". Any other function returns nothing.
+local ImGui = setmetatable({
+  Begin = function() return true, true end,
+  CollapsingHeader = function() return true end,
+  BeginTable = function() return true end,
+  BeginCombo = function() return true end,
+  Checkbox = function(_, v) return v end,
+  InputInt = function(_, v) return v end,
+  InputText = function(label, v)
+    if SCENARIO == 'window' and label == '##foodSpellTyped' then return 'Summon Food' end
+    return v
+  end,
+  Selectable = function(label)
+    if SCENARIO == 'window' and label == 'Type your own...' and not G.pickedOwn then
+      G.pickedOwn = true; return true                              -- one click only
+    end
+    return false
+  end,
+}, { __index = function() return function() end end })
+package.loaded['ImGui'] = ImGui
 _G.ImGuiTableFlags = { Borders = 1, RowBg = 2 }
+_G.ImGuiCond = { FirstUseEver = 4 }
+_G.ImGuiTableColumnFlags = { WidthFixed = 16, WidthStretch = 8 }
 
 -- Queue one hand out, then run the real entry point to the end.
 if SCENARIO == 'topup' or SCENARIO == 'check' then               -- Tank already carries some
@@ -386,6 +425,8 @@ return {
   held_paused = G.holds['Paused'] == true, held_combat = G.holds['Combat hold'] == true,
   trade_open = G.trade, cursor = G.cursor ~= nil,
   cmds = table.concat(G.cmds, '\n'),
+  food_spell = require('provisions.core').settings.foodSpell,
+  picked_own = G.pickedOwn == true,
 }
 '''
 
@@ -405,6 +446,7 @@ EXPECTED = {
     'topup':     (2, 0, 7, 3),   # Tank only needed the difference
     'dannet':    (7, 3, 7, 3),   # old link still works
     'check':     (5, 3, 0, 0),   # what each box carries, nothing given
+    'window':    (7, 3, 7, 3),   # typed spell used, normal hand out
 }
 
 
@@ -481,6 +523,11 @@ def check_extra(scenario, out):
         bad.append('MQRemote should have been loaded on Wiz through DanNet')
     if scenario == 'normal' and any(c.startswith('/plugin MQRemote') or '/plugin MQRemote' in c for c in cmds):
         bad.append('nothing should be loaded when MQRemote is already up')
+    if scenario == 'window':
+        if not out['picked_own']:
+            bad.append('the Food spell drop down was never drawn')
+        if out['food_spell'] != 'Summon Food':
+            bad.append('typed food spell should be saved, got ' + repr(out['food_spell']))
     if scenario == 'topup' and out['recv_tank'] != 7:
         bad.append('Tank should end with 7 bread, holds %d' % out['recv_tank'])
     if scenario == 'busy':

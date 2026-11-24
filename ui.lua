@@ -1,8 +1,15 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  Picking a link in Options now also asks for its
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  The Food spell and Drink spell override boxes are now
+                       drop downs (spellPicker). They list "Type your own..."
+                       at the top, then "Auto" with the best detected spell,
+                       then every known food or drink summon spell scribed
+                       in this character's book. "Type your own..." opens a
+                       text box with a note saying whether that name is in
+                       the book.
+                2.2.0  Picking a link in Options now also asks for its
                        plugin to be loaded (core.requestLinkLoad). The
                        tooltip says so.
                 2.1.0  The link choice in Options is now "Talk to other
@@ -156,13 +163,110 @@ local function intInput(label, key, lo, hi, step, stepFast, help, width)
     if help then tooltip(help) end
 end
 
--- Free text box for spell and item names.
+-- Free text box for item names.
 local function textInput(label, key, help)
     local s = core.settings
     ImGui.SetNextItemWidth(220)
     local value = ImGui.InputText(label, s[key] or '')   -- draw the box, get the text back
     if value ~= s[key] then s[key] = value markDirty() end   -- store on change and schedule a save
     if help then tooltip(help) end   -- hover help
+end
+
+--- Spell picker state --------------------------------------------------------------
+-- WHAT : TYPE_OWN is the label of the first drop down entry. typing holds,
+--        per setting key, whether the operator chose to type a name.
+-- WHY  : A typed name is not in the list, so the window must remember that
+--        the text box is wanted even while the box is still empty.
+-- WHERE: spellPicker.
+-- HOW  : typing[key] true = show the text box. It also turns on by itself
+--        when the saved setting is a name that is not in the list, so a
+--        name typed in an earlier session is still shown and editable.
+-- WHEN : Every frame the Options section is open.
+local TYPE_OWN = 'Type your own...'
+local typing = { foodSpell = false, drinkSpell = false }
+
+--[[--------------------------------------------------------------------------
+  setSpell(key, value)
+
+  WHAT  : Stores a spell choice and refreshes detection.
+  WHY   : The "Food spell / Drink spell" line under the buttons should show
+          the new choice at once, not only at the next hand out.
+  WHERE : spellPicker.
+  HOW   : Write the setting, markDirty, casting.detect (which does not
+          wait, so it is safe in the window).
+  WHEN  : When a drop down entry is picked, or a typed name is scribed.
+----------------------------------------------------------------------------]]
+local function setSpell(key, value)
+    core.settings[key] = value   -- '' means auto detect
+    markDirty()   -- schedule a save
+    casting.detect()   -- update casting.food / casting.drink now
+end
+
+--[[--------------------------------------------------------------------------
+  spellPicker(label, key, kind, help)
+
+  WHAT  : A drop down for the food or drink spell. Entries, top to bottom:
+            Type your own...     shows a text box for any spell name
+            Auto (<best spell>)  blank setting, best scribed spell is used
+            each scribed spell   from casting.choices[kind], best first
+  WHY   : The operator asked to pick from the spells the current character
+          actually has, instead of typing a name from memory, while still
+          being able to enter a server custom spell.
+  WHERE : drawOptions, once for food and once for drink.
+  HOW   : ImGui BeginCombo / Selectable / EndCombo. The preview shows the
+          current choice. Picking an entry calls setSpell. In typing mode a
+          text box follows; each edit is saved, and when the text is blank
+          or a scribed spell, detection is refreshed at once. A note after
+          the box says "In your book" (green), "Not in your book" (red,
+          auto detect is used instead), or how to use the box (grey).
+  WHEN  : Every frame the Options section is open.
+----------------------------------------------------------------------------]]
+local function spellPicker(label, key, kind, help)
+    local s = core.settings
+    local current = s[key] or ''   -- saved choice; '' = auto
+    local choices = casting.choices[kind] or {}   -- scribed spells, best first
+    local listed = current == ''   -- is the saved choice one of the entries?
+    for _, name in ipairs(choices) do
+        if name == current then listed = true end   -- a scribed list spell
+    end
+    if not listed then typing[key] = true end   -- a typed name from before
+
+    local autoLabel = string.format('Auto (%s)', choices[1] or 'none found')   -- best scribed spell
+    local preview = typing[key] and TYPE_OWN or (current == '' and autoLabel or current)
+    ImGui.SetNextItemWidth(220)
+    if ImGui.BeginCombo(label, preview) then   -- true while the list is open
+        if ImGui.Selectable(TYPE_OWN, typing[key]) then typing[key] = true end   -- show the text box
+        if ImGui.Selectable(autoLabel, not typing[key] and current == '') then   -- back to auto detect
+            typing[key] = false
+            setSpell(key, '')
+        end
+        for _, name in ipairs(choices) do   -- one entry per scribed spell
+            if ImGui.Selectable(name, not typing[key] and current == name) then
+                typing[key] = false
+                setSpell(key, name)
+            end
+        end
+        ImGui.EndCombo()   -- only when BeginCombo returned true
+    end
+    tooltip(help)   -- hover help for the drop down
+
+    if not typing[key] then return end   -- no text box needed
+    ImGui.SetNextItemWidth(220)
+    local value = ImGui.InputText('##' .. key .. 'Typed', current)   -- hidden label, unique per setting
+    if value ~= current then   -- the operator typed something
+        s[key] = value
+        markDirty()   -- schedule a save
+        if value == '' or casting.inBook(value) then casting.detect() end   -- never warns for these
+    end
+    tooltip('The exact spell name as it appears in your spell book. Blank means auto detect.')
+    ImGui.SameLine()   -- note to the right of the box
+    if value == '' then
+        colored(GREY, 'Blank: auto detect')
+    elseif casting.inBook(value) then
+        colored(GREEN, 'In your book')   -- scribed: this spell will be used
+    else
+        colored(RED, 'Not in your book, auto detect is used')   -- casting.pick falls back
+    end
 end
 
 --[[--------------------------------------------------------------------------
@@ -377,7 +481,8 @@ end
   HOW   : Link method radio buttons (MQRemote, DanNet, EQBC, Manual; a
           pick also requests the plugin load), bound checkboxes and number boxes in
           three groups (general, Combat Hold and busy members, limits),
-          then spell and item text boxes and Refresh spells. Locked while a
+          then the spell drop downs (spellPicker), item text boxes and
+          Refresh spells. Locked while a
           job runs.
   WHEN  : Every frame when expanded.
 ----------------------------------------------------------------------------]]
@@ -441,8 +546,10 @@ local function drawOptions()
 
     -- Names.
     ImGui.Separator()
-    textInput('Food spell override', 'foodSpell', 'Leave blank to auto detect.')
-    textInput('Drink spell override', 'drinkSpell', 'Leave blank to auto detect.')
+    spellPicker('Food spell', 'foodSpell', 'food',   -- setting foodSpell
+        'Auto uses the best food spell in your book. Pick a spell to always use it, or type your own.')
+    spellPicker('Drink spell', 'drinkSpell', 'drink',   -- setting drinkSpell
+        'Auto uses the best drink spell in your book. Pick a spell to always use it, or type your own.')
     textInput('Food item name', 'foodItem', 'Learned automatically after the first cast.')   -- setting foodItem
     textInput('Drink item name', 'drinkItem', 'Learned automatically after the first cast.')   -- setting drinkItem
     if ImGui.Button('Refresh spells') then casting.detect() end   -- re run detection after scribing or editing

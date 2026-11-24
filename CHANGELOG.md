@@ -11,6 +11,30 @@
 
 # Changelog
 
+## 2.3.0 (2026-11-24)
+
+The spell override boxes are now drop downs.
+
+New
+
+- Options: "Food spell" and "Drink spell" replace the two override text
+  boxes. Each drop down lists, top to bottom:
+  - "Type your own..." opens a text box for any spell name, such as a
+    server custom spell. A note beside it says "In your book" (green) or
+    "Not in your book, auto detect is used" (red).
+  - "Auto (best spell)" leaves the setting blank, as before.
+  - Every known food or drink summon spell scribed in this character's
+    book, best first.
+- Picking an entry updates the "Food spell / Drink spell" line under the
+  buttons at once.
+- A name saved by an older version still shows, under "Type your own...".
+
+Tests
+
+- dev/smoke_test.py now has a fake ImGui and draws the window on every
+  wait in every scenario. New scenario window: pick "Type your own...",
+  type Summon Food, then a full hand out. 15 scenarios.
+
 ## 2.2.0 (2026-11-24)
 
 Provisions now loads the link plugin itself.

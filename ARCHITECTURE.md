@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/ARCHITECTURE.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.2.0
+  VERSION : 2.3.0
   WHAT    : Maintainer's map of the package: what each file does, how a job
             flows through them, how Stop, Pause and Combat Hold work, where
             every setting is used, and recipes for common changes.
@@ -222,7 +222,7 @@ with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 | Setting | Read in |
 |---|---|
 | `foodCount`, `drinkCount` | init.planNeeds, ui.drawCounts, ui.resultText |
-| `foodSpell`, `drinkSpell` | casting.detect |
+| `foodSpell`, `drinkSpell` | casting.detect, ui.spellPicker |
 | `foodItem`, `drinkItem` | init, casting.castOnce (learned here), ui |
 | `gem`, `restoreGem` | casting.memorize, castWithMQ2Cast, casting.restore |
 | `useMQ2Cast`, `castMaxTries` | casting.beginJob, usingMQ2Cast, castWithMQ2Cast |
@@ -243,7 +243,8 @@ with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 
 | I want to | Edit |
 |---|---|
-| Add a new spell name | `FOOD_SPELLS` or `DRINK_SPELLS` in `casting.lua`, best first |
+| Add a new spell name | `FOOD_SPELLS` or `DRINK_SPELLS` in `casting.lua`, best first. It then appears in the Options drop down for characters who have it scribed |
+| Change the spell drop downs | `spellPicker` in `ui.lua`; the list comes from `casting.choices`, filled by `casting.detect` |
 | Add a new option | `core.DEFAULTS` (plus a clamp in `core.load` for numbers), then a control in `ui.drawOptions` |
 | Add a slash command | `onCommand` and `printHelp` in `init.lua`, README table |
 | Change the RGMercs commands | `run`, `checkpoint` and `cleanup` in `init.lua` |

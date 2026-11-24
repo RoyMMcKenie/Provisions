@@ -1,8 +1,14 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  No change in this file.
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  detect now also fills casting.choices: the food and
+                       drink spells from the candidate lists that are
+                       scribed in this character's book, best first. The
+                       window's spell drop downs list them. inBook is now
+                       public as casting.inBook so the window can say
+                       whether a typed name is scribed.
+                2.2.0  No change in this file.
                 2.1.0  No change in this file.
                 2.0.0  Renamed from ClericFood spells.lua. Spell lists now
                        cover every class that summons food and drink
@@ -108,6 +114,7 @@ casting.SUMMON_CLASSES = { CLR = true, DRU = true, SHM = true, MAG = true, BST =
 -- WHEN : Reset at every job start.
 casting.food       = nil
 casting.drink      = nil
+casting.choices    = { food = {}, drink = {} }   -- scribed candidates, best first; filled by detect
 casting.lastResult = ''   -- last MQ2Cast Cast.Result, shown in the window
 casting.progress   = { kind = nil, have = 0, target = 0, fizzles = 0, interrupts = 0 }
 local originalGemSpell = nil
@@ -265,6 +272,9 @@ local function inBook(name)
     return name and name ~= '' and mq.TLO.Me.Book(name)() ~= nil
 end
 
+-- Public so ui.lua can say whether a typed spell name is scribed.
+casting.inBook = inBook
+
 -- Override first, then the best known candidate, else nil.
 local function pick(override, candidates)
     if override and override ~= '' then
@@ -280,16 +290,30 @@ end
 --[[--------------------------------------------------------------------------
   casting.detect()
 
-  WHAT  : Refreshes casting.food and casting.drink.
+  WHAT  : Refreshes casting.food and casting.drink, and the lists of
+          scribed candidates in casting.choices.
   WHY   : A new spell may be scribed mid session, or the override changed.
-  WHERE : init.lua at startup and job start, ui.lua Refresh button.
-  HOW   : pick() for each.
+          The window's drop downs need to know which known spells this
+          character actually has.
+  WHERE : init.lua at startup and job start, ui.lua Refresh button and
+          the spell drop downs.
+  HOW   : pick() for each. choices: every FOOD_SPELLS or DRINK_SPELLS name
+          that inBook confirms, in list order (best first). Me.Book(name)
+          is a single lookup, so this stays cheap enough to run from the
+          window.
   WHEN  : On demand.
 ----------------------------------------------------------------------------]]
 function casting.detect()
     local s = core.settings
     casting.food  = pick(s.foodSpell,  casting.FOOD_SPELLS)
     casting.drink = pick(s.drinkSpell, casting.DRINK_SPELLS)   -- override first
+    for kind, list in pairs({ food = casting.FOOD_SPELLS, drink = casting.DRINK_SPELLS }) do
+        local scribed = {}   -- candidates this character has, best first
+        for _, name in ipairs(list) do
+            if inBook(name) then scribed[#scribed + 1] = name end   -- keep list order
+        end
+        casting.choices[kind] = scribed   -- read by ui.lua spellPicker
+    end
     core.debug('Detected food spell: %s, drink spell: %s',
         tostring(casting.food), tostring(casting.drink))       -- tostring turns nil into text
 end
@@ -628,6 +652,8 @@ return casting   -- hand the module table to require('provisions.casting')
     FOOD_SPELLS / DRINK_SPELLS   Candidate names, best first.
     SUMMON_CLASSES               Classes with summon spells.
     food / drink                 Detected spell names or nil.
+    choices.food / .drink  table Scribed candidates, best first.
+    inBook(name)         bool    Spell of exactly this name is scribed.
     lastResult           string  Last MQ2Cast Cast.Result.
     progress             table   Live summon progress for the window.
     classNote()          string  Warning for non summoning classes, or nil.
@@ -643,7 +669,8 @@ return casting   -- hand the module table to require('provisions.casting')
 
   HOW TO EDIT SAFELY
     - Support a new spell: add it to FOOD_SPELLS or DRINK_SPELLS, best
-      first, or type it in the override box in Options.
+      first (it then shows in the Options drop down for anyone who has it
+      scribed), or pick "Type your own..." in that drop down.
     - Another MQ2Cast result is hopeless: add it to FATAL_RESULTS. Another
       means "just cast again": add it to RETRYABLE_RESULTS.
     - Fizzles never count toward OTHER_FAILURE_LIMIT. The overall safety

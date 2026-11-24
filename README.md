@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.2.0
+  VERSION : 2.3.0
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
@@ -198,8 +198,8 @@ Detected from your spellbook, best first. Levels are from the
 | Abundant Drink | Drink, several per cast | Cleric 28 |
 | Summon Drink | Drink | Cleric 3, Druid 10, Shaman 2, Magician 1, Beastlord 17 |
 
-Other classes see a warning and can type a server's own spell name in the
-override boxes in Options. The item each spell creates is learned from the
+Other classes see a warning and can pick "Type your own..." in the Food
+spell or Drink spell drop down in Options and enter a server's own spell. The item each spell creates is learned from the
 cursor after the first cast.
 
 ## Options
@@ -226,6 +226,8 @@ cursor after the first cast.
 | Accept timeout | 12 s | Trade is cancelled if not accepted in time. |
 | Walk timeout | 30 s | Longest walk to one member. |
 | Meditate timeout | 120 s | Longest wait for mana per cast. |
+| Food spell / Drink spell | Auto | Drop down. "Type your own..." (top) opens a box for any spell name, with a note saying whether it is in your book. "Auto" uses the best spell you have scribed. Below that, every known summon spell in this character's book. A typed name that is not scribed is ignored and Auto is used. |
+| Food item / Drink item name | Learned | The item each spell creates. Filled in after the first cast. |
 
 Settings save per server and character to
 `<MacroQuest>/config/provisions_<server>_<name>.lua`.

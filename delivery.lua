@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  Adds ensureLink: when the chosen link plugin is not
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  No change in this file.
+                2.2.0  Adds ensureLink: when the chosen link plugin is not
                        loaded on the caster it is loaded with the documented
                        /plugin <name> load (which also adds it to
                        MacroQuest.ini so it loads by itself next session).

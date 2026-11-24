@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.2.0
-  CHANGES     : 2.2.0  Adds the linkLoadRequested job flag and
+  VERSION     : 2.3.0
+  CHANGES     : 2.3.0  No change in this file.
+                2.2.0  Adds the linkLoadRequested job flag and
                        core.requestLinkLoad, so picking a link in Options
                        (and starting the script) loads its plugin.
                 2.1.0  The default link to other boxes (acceptMethod) is
