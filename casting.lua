@@ -1,8 +1,11 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.2
-  CHANGES     : 2.3.2  Comments say /provisions.
+  VERSION     : 2.3.3
+  CHANGES     : 2.3.3  MQ2Cast loads and unloads with noauto so MacroQuest.ini
+                       is not changed. The class warning names the spell
+                       drop downs.
+                2.3.2  Comments say /provisions.
                 2.3.1  No change in this file.
                 2.3.0  detect now also fills casting.choices: the food and
                        drink spells from the candidate lists that are
@@ -197,7 +200,7 @@ end
 function casting.classNote()
     local cls = mq.TLO.Me.Class.ShortName() or '?'   -- e.g. CLR
     if casting.SUMMON_CLASSES[cls] then return nil end
-    return string.format('%s has no food or drink summon spells. Use the override boxes in Options for a server custom spell.', cls)
+    return string.format('%s has no food or drink summon spells. Pick \"Type your own...\" in the Options spell drop downs for a server custom spell.', cls)
 end
 
 --[[--------------------------------------------------------------------------
@@ -210,8 +213,12 @@ end
           have to remember to load it, and the plugin list should end up
           exactly as it was.
   WHERE : init.lua run (begin) and cleanup (end).
-  HOW   : /plugin mq2cast load, wait up to 3 seconds; record that we did.
-          If loading fails, warn and fall back to plain /cast.
+  HOW   : /plugin mq2cast load noauto, wait up to 3 seconds; record that
+          we did. The documented noauto switch stops MacroQuest writing the
+          change into MacroQuest.ini, so the next session starts with the
+          same plugin list. endJob sends /plugin mq2cast unload noauto only
+          when beginJob loaded it. If loading fails, warn and fall back to
+          plain /cast.
   WHEN  : Once at the start and end of every job, including Stop.
 ----------------------------------------------------------------------------]]
 function casting.beginJob()
@@ -221,7 +228,7 @@ function casting.beginJob()
     registerEvents()   -- start listening for fizzles
     if not core.settings.useMQ2Cast or mq2castLoaded() then return end  -- nothing to load
     core.echo('Loading MQ2Cast for this hand out.')
-    core.cmd('/plugin mq2cast load')
+    core.cmd('/plugin mq2cast load noauto')   -- noauto: MacroQuest.ini is not changed
     if core.delay(3000, mq2castLoaded) then
         loadedMQ2Cast = true   -- we loaded it, so we unload it later
     else
@@ -234,7 +241,7 @@ function casting.endJob()
     unregisterEvents()
     casting.progress.kind = nil   -- window stops showing summon progress
     if loadedMQ2Cast and mq2castLoaded() then
-        core.cmd('/plugin mq2cast unload')
+        core.cmd('/plugin mq2cast unload noauto')   -- noauto: MacroQuest.ini is not changed
     end
     loadedMQ2Cast = false   -- reset for the next job either way
 end

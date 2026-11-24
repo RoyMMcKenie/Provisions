@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.2
-  CHANGES     : 2.3.2  Adds the loadOnOtherBoxes setting, off by default.
+  VERSION     : 2.3.3
+  CHANGES     : 2.3.3  Comment fixes only (out of zone spawn ID, trade range,
+                       waiting loops).
+                2.3.2  Adds the loadOnOtherBoxes setting, off by default.
                        Help text now says /provisions.
                 2.3.1  No change in this file.
                 2.3.0  No change in this file.
@@ -457,7 +459,7 @@ function core.load()
     loaded.summonTimeoutMin = core.clamp(loaded.summonTimeoutMin, 0, 240) -- 0 = no limit
     loaded.medTimeoutSec    = core.clamp(loaded.medTimeoutSec, 10, 600)   -- mana wait per cast
     loaded.tradeTimeoutSec  = core.clamp(loaded.tradeTimeoutSec, 3, 60)   -- accept wait
-    loaded.tradeRange       = core.clamp(loaded.tradeRange, 5, 25)        -- EQ allows about 20
+    loaded.tradeRange       = core.clamp(loaded.tradeRange, 5, 25)        -- trades need close range
     loaded.navTimeoutSec    = core.clamp(loaded.navTimeoutSec, 5, 120)    -- walking limit
     loaded.combatSettleSec  = core.clamp(loaded.combatSettleSec, 0, 60)   -- quiet time after a fight
     loaded.busyTries        = core.clamp(loaded.busyTries, 1, 10)         -- attempts per busy member
@@ -526,7 +528,7 @@ local REFRESH_MS  = 500
 ----------------------------------------------------------------------------]]
 local function buildRow(member, isSelf)
     local spawn = member.Spawn            -- the in zone body of the member
-    local id = spawn.ID()                 -- nil when in another zone
+    local id = spawn.ID()                 -- nil or 0 when in another zone
     return {
         name     = member.Name() or '?',                     -- works across zones
         id       = id,                                       -- spawn id or nil
@@ -838,8 +840,8 @@ return core   -- hand the module table to require('provisions.core')
   HOW TO EDIT SAFELY
     - Never require another provisions file from here. Every file requires
       core, so that would create a require loop.
-    - core.delay must stay the only waiting helper. A loop without mq.delay
-      anywhere freezes the game client.
+    - core.delay must stay the only waiting helper. Every loop that waits
+      must go through mq.delay so the game and the window keep running.
     - Add a setting: one commented key in DEFAULTS, a clamp line in
       core.load if it is a number, and a control in ui.lua drawOptions.
       Old settings files pick it up automatically.

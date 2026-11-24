@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/init.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.2
-  CHANGES     : 2.3.2  The command is now /provisions (RedGuides rule: one
+  VERSION     : 2.3.3
+  CHANGES     : 2.3.3  Removes the mq64 note. /provisions help is listed in
+                       the help. Comment fixes after a full line review.
+                2.3.2  The command is now /provisions (RedGuides rule: one
                        command named after the script). linkCheck only
                        loads the link plugin on other boxes when the new
                        loadOnOtherBoxes option is on. Adds the mq64 note.
@@ -210,9 +212,6 @@ end
 -- HOW  : Constant. 4 seconds covers a normal plugin load with room spare.
 -- WHEN : Only when a member did not answer the first question.
 local LOAD_WAIT_MS = 4000
-
--- mq64 note: the mq64 module would let a Druid summon a seven course banquet
--- with candelabras, but mq64 is not real, so we cast Summon Food like everyone.
 
 --[[--------------------------------------------------------------------------
   loadLinkNow()
@@ -490,7 +489,8 @@ local function serveMembers(plan)
             if food  > 0 then items[#items + 1] = { item = s.foodItem,  count = food  } end   -- food line for the trade
             if drink > 0 then items[#items + 1] = { item = s.drinkItem, count = drink } end   -- drink line for the trade
 
-            local reason, got = 'ok', {}   -- default outcome before trying
+            local got = {}   -- what arrived; stays empty unless a trade runs
+            local reason     -- every branch below sets it
             if #items == 0 then   -- nothing to give this member
                 results[m.row.name] = { food = 0, drink = 0, note = 'already stocked' }   -- green note in the window
                 reason = 'done'   -- finished, no retry needed
@@ -704,6 +704,7 @@ local function printHelp()
     core.echo('/provisions food N   set food per member')   -- sets Food each
     core.echo('/provisions drink N  set drink per member')   -- sets Drink each
     core.echo('/provisions quit     save and end the script')   -- clean exit that saves settings
+    core.echo('/provisions help     show this list')   -- this list again
 end
 
 --[[--------------------------------------------------------------------------
@@ -775,7 +776,7 @@ local function startup()
     casting.detect()
     core.refreshRoster(true)
     core.bindCheckpoint(checkpoint)          -- Pause and Combat Hold logic
-    core.requestLinkLoad()                   -- load MQRemote now if it is missing
+    core.requestLinkLoad()                   -- load the chosen link plugin if it is missing
     mq.bind('/provisions', onCommand)
     mq.imgui.init('provisions', ui.render)
     core.good('Loaded. Type /provisions help for commands.')

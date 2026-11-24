@@ -11,6 +11,32 @@
 
 # Changelog
 
+## 2.3.3 (2026-11-24)
+
+A line by line review of every file for accurate comments, documented
+commands and dead code.
+
+Changed
+
+- Targeting uses `/mqtarget id`. The MacroQuest docs mark `/target` as
+  deprecated.
+- MQ2Cast is loaded and unloaded with `noauto`, so MacroQuest.ini is
+  left exactly as it was.
+- DanNet queries now wait for a reply newer than the one stored before
+  asking, using the documented `Received` timestamp.
+- `/provisions help` now appears in its own help list.
+- The class warning points to the Food spell and Drink spell drop downs.
+
+Removed
+
+- The mq64 joke comment in init.lua.
+
+Fixed
+
+- Comments and tooltips that claimed more than the docs say: trade
+  range, ImGui waits, DanNet query clearing, which links can load the
+  plugin on other boxes, and several WHERE lines.
+
 ## 2.3.2 (2026-11-24)
 
 Brings the package in line with the RedGuides resource rules and

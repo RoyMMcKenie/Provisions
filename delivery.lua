@@ -1,8 +1,11 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.2
-  CHANGES     : 2.3.2  Comments and the pong command say /provisions.
+  VERSION     : 2.3.3
+  CHANGES     : 2.3.3  Targets with /mqtarget (the docs mark /target
+                       deprecated). DanNet queries wait for a reply newer
+                       than the one stored before asking. Comment fixes.
+                2.3.2  Comments and the pong command say /provisions.
                        loadOnOthers now runs only when loadOnOtherBoxes is
                        on.
                 2.3.1  Removed real character names from a comment.
@@ -141,8 +144,8 @@ end
           how the package learns the real item name on any server, and the
           stack size is how a pickup is verified.
   WHERE : casting.lua castOnce, delivery.pickUp.
-  HOW   : Cursor TLO. A non stackable item reports Stack 0 but is still one
-          item, so anything under 1 counts as 1.
+  HOW   : Cursor TLO. Anything under 1 counts as 1, so an item that
+          reports no stack size is still counted as one item.
   WHEN  : After a cast and after a pickup.
 ----------------------------------------------------------------------------]]
 function delivery.cursorName()
@@ -216,8 +219,9 @@ end
   packWindowOpen(packNumber)
 
   WHAT  : True when the bag window for packN is open.
-  WHY   : Some clients refuse /itemnotify into a closed bag. Knowing the
-          state lets the script open it only when needed and close it again.
+  WHY   : Clicking an item inside a bag is done with the bag open, as a
+          player would. Knowing the state lets the script open it only when
+          needed and close it again.
   WHERE : delivery.pickUp.
   HOW   : Window TLO; the window name is PackN.
   WHEN  : Before and after a pickup from a bag.
@@ -372,10 +376,11 @@ end
   WHY   : Without the plugin no command can reach the other boxes, so every
           trade would time out three times per member. Finding out before
           the first cast saves the mana and the wait.
-  WHERE : init.lua run (before summoning) and linkCheck.
+  WHERE : init.lua loadLinkNow, to tell whether the plugin was already up
+          before ensureLink runs.
   HOW   : Plugin TLO IsLoaded on the plugin from LINKS. Manual always
           passes.
-  WHEN  : At the start of every job and every link check.
+  WHEN  : When a link is picked in Options, and once at startup.
 ----------------------------------------------------------------------------]]
 function delivery.linkReady()
     local link = LINKS[core.settings.acceptMethod]
@@ -403,8 +408,8 @@ end
              the plugin to the [Plugins] section of MacroQuest.ini, so it
              loads by itself in the next session.
           3. Wait up to 3 seconds for the Plugin TLO to say it is loaded.
-          The plugin is never unloaded afterwards: the other boxes need it
-          to answer, and unloading a plugin can end Lua scripts.
+          The plugin is never unloaded afterwards: it is the link the
+          operator chose, and the other boxes need it to answer.
   WHEN  : See WHERE.
 ----------------------------------------------------------------------------]]
 function delivery.ensureLink()
@@ -610,21 +615,25 @@ end
   WHY   : DanNet can read values directly, so in DanNet mode it is used
           for the combat state and Top up counts.
   WHERE : askDanNet.
-  HOW   : /dquery <peer> -q "<query>". The DanNet author documents that a
-          new /dquery clears the stored answer and its Received timestamp,
-          and that Received is filled in when the reply arrives. A short
-          pause after the command lets the clear happen, then the wait is on
-          DanNet(peer).Q(query).Received. Peer names are lower case.
+  HOW   : /dquery <peer> -q "<query>". The DanNet docs say
+          DanNet(peer).Q(query).Received is the timestamp of the last reply
+          to that query (0 when never received). The timestamp is read
+          before the query is sent, and the wait ends when a newer one
+          arrives, so an older answer is never read as the new one. Peer
+          names are lower case.
   WHEN  : DanNet mode only.
 ----------------------------------------------------------------------------]]
 function delivery.query(name, query, timeoutMs)
     local peer = name:lower()                   -- DanNet peer names are lower case
+    local before = mq.TLO.DanNet(peer).Q(query).Received() or 0   -- last reply time, 0 if none
     core.cmd('/dquery %s -q "%s"', peer, query)
-    mq.delay(100)   -- let DanNet clear the previous answer first
-    -- Wait for the reply timestamp; 0 or nil means not received yet.
+    -- Wait for a reply newer than the one stored before we asked.
     mq.delay(timeoutMs or 2000, function()
-        return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0
+        return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > before
     end)
+    if (mq.TLO.DanNet(peer).Q(query).Received() or 0) <= before then   -- still the old timestamp
+        return nil   -- no new reply in time
+    end
     local answer = mq.TLO.DanNet(peer).Q(query)()   -- the stored reply text
     if answer == nil or answer == '' or answer == 'NULL' then return nil end  -- no usable reply
     return tostring(answer)
@@ -735,7 +744,7 @@ end
   WHAT  : Cancels an open trade and puts anything on the cursor back in the
           bags.
   WHY   : An open trade blocks casting, movement and the next trade.
-  WHERE : runOneTrade failure paths, init.lua checkpoint and cleanup.
+  WHERE : runOneTrade failure paths and init.lua cleanup.
   HOW   : TRDW_Cancel_Button, wait for the window to close with plain
           mq.delay so it works after Stop, then clear the cursor. Cancelling
           returns offered items to the caster's bags.
@@ -768,7 +777,8 @@ end
 
   WHAT  : Gets the caster within trade range of a member. Returns true when
           in range.
-  WHY   : EQ refuses a trade beyond about 20 units.
+  WHY   : EQ only opens a trade at close range. The Trade range
+          setting in Options says how close is close enough.
   WHERE : delivery.giveItems.
   HOW   : Live distance check. If too far and walking is allowed and
           possible, /nav id to the member until in range or out of time,
@@ -879,7 +889,7 @@ end
   WHY   : Split from giveItems so a large hand out can repeat it.
   WHERE : delivery.giveItems.
   HOW   : 1. Count each item before.
-          2. Target the member.
+          2. Target the member with /mqtarget id.
           3. Lift and drop each stack, up to eight. A short lift queues the
              remainder as the next drop. If the item stays on the cursor or
              the window never opens, the member is treated as busy.
@@ -893,8 +903,9 @@ local function runOneTrade(row, drops)
     local before = {}
     for _, d in ipairs(drops) do before[d.item] = delivery.count(d.item) end
 
-    -- Step 2: target the receiver.
-    core.cmd('/target id %d', row.id)
+    -- Step 2: target the receiver. /mqtarget is the MacroQuest command;
+    -- the docs mark the older /target form as deprecated.
+    core.cmd('/mqtarget id %d', row.id)
     if not core.delay(2000, function() return mq.TLO.Target.ID() == row.id end) then
         core.err('Could not target %s.', row.name)
         return {}, drops, 'failed'   -- nothing could be targeted, nothing traded
@@ -1030,7 +1041,7 @@ return delivery   -- hand the module table to require('provisions.delivery')
       /windows in game.
     - Only general inventory is touched. Raise LAST_GENERAL_SLOT if a
       future client adds slots.
-    - Add a link method: an entry in LINKS, a branch in delivery.remote,
+    - Add a link method: an entry in LINKS, a branch in sendVia,
       a branch in delivery.probe if it can answer questions, and a radio
       button in ui.lua drawOptions.
     - The pong reply format is "/provisions pong <token> <name> <combat> <food>

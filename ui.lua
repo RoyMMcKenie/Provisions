@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.2
-  CHANGES     : 2.3.2  Adds the "Load the link plugin on other boxes"
+  VERSION     : 2.3.3
+  CHANGES     : 2.3.3  Tooltip and comment fixes (other box loading, trade
+                       range, ImGui waits).
+                2.3.2  Adds the "Load the link plugin on other boxes"
                        checkbox under the link choice. Text says
                        /provisions.
                 2.3.1  No change in this file.
@@ -50,8 +52,8 @@
   WHEN  : Every frame while the window is open.
 
   READING GUIDE (for future you)
-    - Nothing in this file may wait (no mq.delay). ImGui callbacks that wait
-      freeze the client.
+    - Nothing in this file may wait (no mq.delay). The MacroQuest docs say
+      mq.delay inside an ImGui callback raises an error.
     - BeginDisabled / EndDisabled must always come in pairs.
     - PushID / PopID make the "##give" checkbox label unique per row.
     - Most settings are locked while a job runs, including while it is
@@ -509,7 +511,7 @@ local function drawOptions()
     end
     -- Opt in: load the link plugin on boxes that do not answer (off by default).
     checkbox('Load the link plugin on other boxes', 'loadOnOtherBoxes',   -- setting loadOnOtherBoxes
-        'When a box does not answer the link check, send it /plugin <name> load through DanNet or EQBC if one is up here. Off by default.')   -- hover help for loadOnOtherBoxes
+        'When a box does not answer the link check, send it /plugin <name> load through another link plugin (DanNet, EQBC or MQRemote) that is loaded here. Off by default.')   -- hover help for loadOnOtherBoxes
 
     -- General behaviour.
     checkbox('Top up only', 'topUp',
@@ -547,7 +549,7 @@ local function drawOptions()
     intInput('Max tries per cast', 'castMaxTries', 1, 20, 1, 5, 'MQ2Cast -maxtries. Attempts per cast before it reports failure.', 100)
     intInput('Summon time limit (min)', 'summonTimeoutMin', 0, 240, 5, 15,   -- setting summonTimeoutMin
         'Summoning keeps casting through fizzles until the count is reached. This stops it after this many minutes, not counting time held. 0 = no limit.', 100)   -- hover help for summonTimeoutMin
-    intInput('Trade range', 'tradeRange', 5, 25, 1, 5, 'Units. EQ allows about 20.', 100)   -- setting tradeRange
+    intInput('Trade range', 'tradeRange', 5, 25, 1, 5, 'Units. Trades only open at close range.', 100)   -- setting tradeRange
     intInput('Accept timeout (s)', 'tradeTimeoutSec', 3, 60, 1, 5, 'Cancel the trade if not accepted in this time.', 100)   -- setting tradeTimeoutSec
     intInput('Walk timeout (s)', 'navTimeoutSec', 5, 120, 5, 15, 'Longest walk to one member.', 100)   -- setting navTimeoutSec
     intInput('Meditate timeout (s)', 'medTimeoutSec', 10, 600, 10, 60, 'Longest wait for mana per cast.', 100)   -- setting medTimeoutSec
@@ -608,7 +610,7 @@ return ui   -- hand the module table to require('provisions.ui')
     - Nothing in this file may call mq.delay or anything that waits.
     - Add an option: a key in core.DEFAULTS (plus a clamp in core.load for
       numbers), then one checkbox, intInput or textInput line here.
-    - Buttons only call core.request, core.requestCheck,
+    - Run buttons only call core.request, core.requestCheck,
       core.requestLinkLoad, core.togglePause and core.stop. Never
       run job steps from here.
     - Change the 80 limit: both intInput lines in drawCounts, the clamps in

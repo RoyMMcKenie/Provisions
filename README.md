@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.2
+  VERSION : 2.3.3
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
@@ -75,7 +75,7 @@ matters.
 Casting goes through MQ2Cast (`/casting "spell|gem8" -maxtries|5`), which
 recasts on fizzles and interrupts and reports the reason in `Cast.Result`.
 If MQ2Cast is not loaded the script loads it for the job and unloads it
-after. If it cannot be loaded, or the option is turned off, plain `/cast`
+after, with `noauto` so MacroQuest.ini is not changed. If it cannot be loaded, or the option is turned off, plain `/cast`
 is used.
 
 ### Link to other boxes (MQRemote)
@@ -228,7 +228,7 @@ cursor after the first cast.
 | Spell gem | 8 | Gem used when a summon spell is not memorised. |
 | Max tries per cast | 5 | MQ2Cast `-maxtries` for one `/casting` call. Fizzles past this are fine; the script casts again. |
 | Summon time limit | 20 min | Summoning keeps going through any number of fizzles until the count is reached. This is only a safety net, and time held does not count. 0 = no limit. |
-| Trade range | 15 | Units. EQ allows about 20. |
+| Trade range | 15 | Units. Trades only open at close range. |
 | Accept timeout | 12 s | Trade is cancelled if not accepted in time. |
 | Walk timeout | 30 s | Longest walk to one member. |
 | Meditate timeout | 120 s | Longest wait for mana per cast. |
