@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.4
-  CHANGES     : 2.3.4  Comments now quote the MQ2Cast docs for -maxtries,
+  VERSION     : 2.3.5
+  CHANGES     : 2.3.5  No change in this file.
+                2.3.4  Comments now quote the MQ2Cast docs for -maxtries,
                        Cast.Status and the result codes.
                 2.3.3  MQ2Cast loads and unloads with noauto so MacroQuest.ini
                        is not changed. The class warning names the spell

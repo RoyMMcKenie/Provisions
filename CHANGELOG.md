@@ -11,6 +11,17 @@
 
 # Changelog
 
+## 2.3.5 (2026-11-24)
+
+Documentation only, after one more read of the 2.3.4 DanNet change.
+
+Changed
+
+- The 2.3.4 entry now says the DanNet peer name bug dates from 2.1.0,
+  not only 2.3.3.
+- The dannetPeer comment explains why the _name match is safe and what
+  happens with a same named box on another server.
+
 ## 2.3.4 (2026-11-24)
 
 A second review of every comment that cites a doc.
@@ -19,7 +30,8 @@ Fixed
 
 - DanNet mode: the link check now finds peers listed as
   `server_character`. The MQ2Dan README says Full Names is on by default,
-  so 2.3.3 could report "No DanNet answer" for boxes that were connected.
+  so every version since the peer list check came in (2.1.0 to 2.3.3)
+  could report "No DanNet answer" for boxes that were connected.
 
 Changed
 

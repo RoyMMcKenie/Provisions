@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.4
+  VERSION : 2.3.5
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.

@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.4
-  CHANGES     : 2.3.4  The DanNet peer check also matches server_character,
+  VERSION     : 2.3.5
+  CHANGES     : 2.3.5  The dannetPeer comment explains the _name match and a
+                       same named box on another server.
+                2.3.4  The DanNet peer check also matches server_character,
                        the MQ2Dan Full Names default. Comments no longer
                        claim doc support for case rules, ItemSlot2 -1, or
                        a nested MQRemote pattern.
@@ -613,6 +615,11 @@ end
           setting is on by default, which lists a peer as server_character,
           so an entry matches when it equals the name or ends in _name.
           The README does not state a case rule, so case is ignored.
+          EverQuest character names have no underscore, so _name can only
+          match the character part. A box with the same name on another
+          server also matches; it then gets the query by bare name, which
+          the README says means your own server, so it times out and the
+          member is reported as not answering.
   WHEN  : Link checks and Top up planning.
 ----------------------------------------------------------------------------]]
 local function dannetPeer(name)

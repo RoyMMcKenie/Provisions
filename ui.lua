@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.4
-  CHANGES     : 2.3.4  The MQ2Cast tooltip matches the docs.
+  VERSION     : 2.3.5
+  CHANGES     : 2.3.5  No change in this file.
+                2.3.4  The MQ2Cast tooltip matches the docs.
                 2.3.3  Tooltip and comment fixes (other box loading, trade
                        range, ImGui waits).
                 2.3.2  Adds the "Load the link plugin on other boxes"

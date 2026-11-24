@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.4
-  CHANGES     : 2.3.4  Comment fixes (XTHaterCount has no doc description,
+  VERSION     : 2.3.5
+  CHANGES     : 2.3.5  No change in this file.
+                2.3.4  Comment fixes (XTHaterCount has no doc description,
                        out of zone spawn ID).
                 2.3.3  Comment fixes only (out of zone spawn ID, trade range,
                        waiting loops).
