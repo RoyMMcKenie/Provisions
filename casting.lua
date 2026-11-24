@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.3
-  CHANGES     : 2.3.3  MQ2Cast loads and unloads with noauto so MacroQuest.ini
+  VERSION     : 2.3.4
+  CHANGES     : 2.3.4  Comments now quote the MQ2Cast docs for -maxtries,
+                       Cast.Status and the result codes.
+                2.3.3  MQ2Cast loads and unloads with noauto so MacroQuest.ini
                        is not changed. The class warning names the spell
                        drop downs.
                 2.3.2  Comments say /provisions.
@@ -46,8 +48,9 @@
   HOW   : FOOD_SPELLS and DRINK_SPELLS list candidates best first. The first
           one found in Me.Book wins, unless the operator typed an override.
           Casting prefers MQ2Cast: /casting "spell|gemN" -maxtries|N
-          memorises the spell, casts it, and recasts on fizzle or interrupt
-          up to N times, then Cast.Result says why it stopped. When MQ2Cast
+          memorises the spell and casts it. The MQ2Cast docs say -maxtries
+          casts "through this many failures until successful", and
+          Cast.Result then holds the result code. When MQ2Cast
           is off or cannot be loaded, plain /memspell and /cast are used.
           Each cast is followed by /autoinventory so the cursor is clear.
 
@@ -57,8 +60,9 @@
   READING GUIDE (for future you)
     - "Gem" is one spell slot on the spell bar. Gem 8 is the default
       borrowed slot. "Memorise" means load a spell from the book into a gem.
-    - MQ2Cast's Cast.Status TLO reads "I" when idle, and Cast.Result holds a
-      code such as CAST_SUCCESS or CAST_FIZZLE after a cast finishes.
+    - MQ2Cast's Cast.Status is a string of pending event codes; the docs
+      list "I" as idle. Cast.Result holds the result of the last /casting,
+      a code such as CAST_SUCCESS or CAST_FIZZLE.
     - Call order inside one job:
         beginJob -> summonUntil('food') -> summonUntil('drink')
                  -> restore -> endJob
@@ -162,7 +166,8 @@ local function registerEvents()
     end
 end
 
--- Remove every event registered above; mq.unevent is safe if never added.
+-- Remove every event registered above. The docs do not cover a name that
+-- was never added; registerEvents relies on that being harmless.
 local function unregisterEvents()
     for _, e in ipairs(EVENTS) do mq.unevent(e.name) end
 end
@@ -273,7 +278,8 @@ end
   WHY   : An operator override always wins if it is scribed; if not, warn
           and fall back rather than failing the whole job.
   WHERE : casting.detect.
-  HOW   : Me.Book(name) returns a page number or nil. pick checks the
+  HOW   : Me.Book(name) is the spell book slot (docs), nil when the
+          spell is not scribed. pick checks the
           override, then walks candidates in order.
   WHEN  : During detection.
 ----------------------------------------------------------------------------]]
@@ -394,15 +400,15 @@ local FATAL_RESULTS = {
     CAST_OUTOFMANA  = 'out of mana',
     CAST_STUNNED    = 'stunned',            -- stop rather than spam
     CAST_UNKNOWN    = 'spell not known',    -- name not recognised
-    CAST_CANCELLED  = 'cancelled',          -- cancelled by the game or a script
-    CAST_ABORTED    = 'aborted',            -- for example by /interrupt
+    CAST_CANCELLED  = 'cancelled',          -- docs: casting was aborted
+    CAST_ABORTED    = 'aborted',            -- docs: casting aborted (/interrupt)
 }
 local RETRYABLE_RESULTS = {
     CAST_FIZZLE      = true,
     CAST_INTERRUPTED = true,   -- cast was interrupted, cast again
-    CAST_DISTRACTED  = true,   -- moved or acted mid cast
-    CAST_RECOVER     = true,   -- spell still recovering
-    CAST_NOTREADY    = true,   -- gem not ready yet
+    CAST_DISTRACTED  = true,   -- docs: you were distracted
+    CAST_RECOVER     = true,   -- docs: spell is not ready
+    CAST_NOTREADY    = true,   -- docs: not ready to cast
 }
 local lastFatal, lastRetryable = false, false
 
@@ -442,8 +448,9 @@ end
   castWithMQ2Cast(name)
 
   WHAT  : Casts a spell through MQ2Cast. Returns true on CAST_SUCCESS.
-  WHY   : MQ2Cast watches chat for fizzles and recasts on its own up to
-          -maxtries, so this package does not have to guess.
+  WHY   : MQ2Cast recasts on its own: the docs say -maxtries casts
+          "through this many failures until successful", so this package
+          does not have to sort out each failed attempt itself.
   WHERE : casting.castOnce.
   HOW   : 1. Record the gem, send /casting "name|gemN" -maxtries|N.
           2. Wait for Cast.Status to leave idle (I).

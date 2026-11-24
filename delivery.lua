@@ -1,8 +1,12 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.3
-  CHANGES     : 2.3.3  Targets with /mqtarget (the docs mark /target
+  VERSION     : 2.3.4
+  CHANGES     : 2.3.4  The DanNet peer check also matches server_character,
+                       the MQ2Dan Full Names default. Comments no longer
+                       claim doc support for case rules, ItemSlot2 -1, or
+                       a nested MQRemote pattern.
+                2.3.3  Targets with /mqtarget (the docs mark /target
                        deprecated). DanNet queries wait for a reply newer
                        than the one stored before asking. Comment fixes.
                 2.3.2  Comments and the pong command say /provisions.
@@ -66,8 +70,10 @@
     - EQ slot numbers 23 to 32 are the ten general inventory slots. A bag in
       slot 23 is "pack1", slot 32 is "pack10". Slots inside a bag are
       numbered from 1 in /itemnotify.
-    - MacroQuest's ItemSlot2 is the slot inside the bag counted from 0, or
-      -1 when the item sits loose in a general slot.
+    - MacroQuest's ItemSlot2 is the slot inside the bag counted from 0
+      (the Slot Names docs page). The docs give no value for an item
+      loose in a general slot; the code treats nil or a negative value as
+      loose.
     - "Cursor" is the item stuck to the mouse pointer.
     - A "drop" is one stack placed in one trade slot, for example
       { item = 'Summoned: Black Bread', count = 10 }. A "plan" is the list
@@ -117,7 +123,8 @@ local LAST_GENERAL_SLOT  = 32
 ----------------------------------------------------------------------------]]
 function delivery.count(itemName)
     if not itemName or itemName == '' then return 0 end   -- nothing to count yet
-    -- Sums every stack in every bag; nil when none are found.
+    -- An int count across the character's inventory (the docs say key
+    -- rings are searched too); or 0 covers a failed read.
     return mq.TLO.FindItemCount('=' .. itemName)() or 0
 end
 
@@ -199,7 +206,7 @@ function delivery.locate(itemName)
     if not item() then return nil end          -- not carried at all
 
     local slot  = item.ItemSlot() or -1        -- 23 to 32 in general inventory
-    local slot2 = item.ItemSlot2() or -1       -- slot in bag from 0, -1 if loose
+    local slot2 = item.ItemSlot2() or -1       -- slot in bag from 0; nil or negative = loose
     local stack = item.Stack() or 1            -- size of this one stack
     if stack < 1 then stack = 1 end
 
@@ -436,7 +443,10 @@ end
   WHERE : remoteAccept, askMQRemote and loadOnOthers.
   HOW   : MQRemote: /rc server <Name> <command>, the documented form for
                     one named character on the same server.
-          DanNet:   /dex <peer> <command>; peer names are lower case.
+          DanNet:   /dex <peer> <command>. The MQ2Dan README says the
+                    bare character name works on your own server. The
+                    name is sent in lower case; the README states no
+                    case rule.
           EQBC:     /bct <Name> //<command>; EQBC needs the double slash.
           Manual:   nothing is sent.
           The text goes through core.cmd('%s', ...) so a % in an item name
@@ -447,7 +457,7 @@ local function sendVia(method, name, command)
     if method == 'mqremote' then
         core.cmd('%s', string.format('/rc server %s %s', name, command))   -- MQRemote: one named box on this server
     elseif method == 'dannet' then   -- DanNet branch
-        core.cmd('%s', string.format('/dex %s %s', name:lower(), command))   -- DanNet: lower case peer name
+        core.cmd('%s', string.format('/dex %s %s', name:lower(), command))   -- DanNet: bare name, lower case
     elseif method == 'eqbc' then   -- EQBC branch
         -- EQBC wants //command; strip our single slash and add two.
         core.cmd('%s', string.format('/bct %s //%s', name, command:gsub('^/', '')))
@@ -564,8 +574,10 @@ end
                /rc server <Name> /rc server <Me> /provisions pong <token>
                    ${Me.CleanName} ${Me.CombatState} <food> <drink>
              The other box receives "/rc server <Me> /provisions pong ...", fills
-             in its own ${} values (the MQRemote docs show this /noparse
-             pattern), and sends /provisions pong back to us.
+             in its own ${} values, and sends /provisions pong back to us.
+             The MQRemote docs show /noparse in front of /rc so the
+             receiving client parses the ${} values; sending a second /rc
+             back is this package's own use of that.
           3. Wait until delivery.onPong has stored a reply with our token.
   WHEN  : Link checks, Top up planning, and before each trade attempt.
 ----------------------------------------------------------------------------]]
@@ -594,15 +606,21 @@ end
           which is exactly what broke the first live test (a VPN had moved
           DanNet onto the wrong network interface).
   WHERE : delivery.probe.
-  HOW   : DanNet.Peers is a | separated list such as "cleric|tank|".
-          Each piece is compared without regard to case.
+  HOW   : DanNet.Peers is the list of connected peers. The MQ2Dan
+          README uses | between entries (its Front Delimiter setting puts
+          one in front too), and RGMercs splits the list on |, so this
+          does the same and skips empty pieces. The README's Full Names
+          setting is on by default, which lists a peer as server_character,
+          so an entry matches when it equals the name or ends in _name.
+          The README does not state a case rule, so case is ignored.
   WHEN  : Link checks and Top up planning.
 ----------------------------------------------------------------------------]]
 local function dannetPeer(name)
     local list = mq.TLO.DanNet.Peers() or ''   -- empty when nobody is connected
     local want = name:lower()
-    for peer in tostring(list):gmatch('[^|]+') do   -- each name between the pipes
-        if peer:lower() == want then return true end
+    for peer in tostring(list):gmatch('[^|]+') do   -- each entry between the pipes
+        local p = peer:lower()
+        if p == want or p:sub(-(#want + 1)) == '_' .. want then return true end   -- name, or server_name
     end
     return false
 end
@@ -619,12 +637,12 @@ end
           DanNet(peer).Q(query).Received is the timestamp of the last reply
           to that query (0 when never received). The timestamp is read
           before the query is sent, and the wait ends when a newer one
-          arrives, so an older answer is never read as the new one. Peer
-          names are lower case.
+          arrives, so an older answer is never read as the new one. The
+          name is lower cased; the MQ2Dan README states no case rule.
   WHEN  : DanNet mode only.
 ----------------------------------------------------------------------------]]
 function delivery.query(name, query, timeoutMs)
-    local peer = name:lower()                   -- DanNet peer names are lower case
+    local peer = name:lower()                   -- lower cased; DanNet states no case rule
     local before = mq.TLO.DanNet(peer).Q(query).Received() or 0   -- last reply time, 0 if none
     core.cmd('/dquery %s -q "%s"', peer, query)
     -- Wait for a reply newer than the one stored before we asked.

@@ -11,6 +11,25 @@
 
 # Changelog
 
+## 2.3.4 (2026-11-24)
+
+A second review of every comment that cites a doc.
+
+Fixed
+
+- DanNet mode: the link check now finds peers listed as
+  `server_character`. The MQ2Dan README says Full Names is on by default,
+  so 2.3.3 could report "No DanNet answer" for boxes that were connected.
+
+Changed
+
+- Comments and tooltips now say only what the docs say: MQ2Cast
+  `-maxtries` ("through this many failures"), `Cast.Status`, the result
+  codes, `Me.Book`, `FindItemCount`, `ItemSlot2`, `Me.XTHaterCount`,
+  DanNet name case, and the MQRemote `/noparse` example.
+- ARCHITECTURE.md no longer says a new `/dquery` clears the stored
+  answer. The MQ2Dan README does not say that.
+
 ## 2.3.3 (2026-11-24)
 
 A line by line review of every file for accurate comments, documented

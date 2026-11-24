@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/init.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.3
-  CHANGES     : 2.3.3  Removes the mq64 note. /provisions help is listed in
+  VERSION     : 2.3.4
+  CHANGES     : 2.3.4  No change in this file.
+                2.3.3  Removes the mq64 note. /provisions help is listed in
                        the help. Comment fixes after a full line review.
                 2.3.2  The command is now /provisions (RedGuides rule: one
                        command named after the script). linkCheck only

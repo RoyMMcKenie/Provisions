@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/ARCHITECTURE.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.3
+  VERSION : 2.3.4
   WHAT    : Maintainer's map of the package: what each file does, how a job
             flows through them, how Stop, Pause and Combat Hold work, where
             every setting is used, and recipes for common changes.
@@ -181,7 +181,8 @@ caster:  /provisions pong 7 Tank ACTIVE 5 3   ->  delivery.onPong stores it
 ```
 
 `/noparse` stops the caster filling in the `${}` values itself; the MQRemote
-docs show this pattern for having the receiving client parse them. The
+docs show `/noparse` in front of `/rc` so the receiving client parses them.
+Sending a second `/rc` back is this package's own use of that. The
 number (7 here) is a token, so a late answer to an older question is never
 taken for the current one. Only the caster runs Provisions; the others need
 only the MQRemote plugin.
@@ -198,11 +199,15 @@ Picking a link in Options calls `core.requestLinkLoad`. The window may not
 wait, so this only sets `job.linkLoadRequested`; `tick` then runs
 `loadLinkNow`, which calls `ensureLink`. Startup sets the same flag.
 
-DanNet queries use `/dquery peer -q "query"`, then wait on
-`DanNet(peer).Q(query).Received`. The MQ2Dan
-[README](https://github.com/dannuic/MQ2Dan/blob/master/README.md) documents
-that a new `/dquery` clears the stored answer, so a stale reply is never
-read.
+DanNet queries read `DanNet(peer).Q(query).Received` first, send
+`/dquery peer -q "query"`, then wait for a newer `Received` timestamp. The
+MQ2Dan [README](https://github.com/dannuic/MQ2Dan/blob/master/README.md)
+says `Received` is the last received timestamp (0 for never); it does not
+say a new `/dquery` clears it, so the code does not rely on that.
+
+The DanNet link check splits `DanNet.Peers` on `|`. The README's Full
+Names setting is on by default, which lists peers as `server_character`,
+so a peer matches on the bare name or on `_name` at the end.
 
 ## How fizzles are handled
 
@@ -313,7 +318,7 @@ labels. `dev/doc_audit.py` checks all of the Lua rules.
 | Drop | One stack placed into one trade slot |
 | Plan | The list of drops for one member |
 | Reserve | Stock the caster keeps and never trades away |
-| Peer | A box on DanNet, addressed by lower case name |
+| Peer | A box on DanNet, addressed by its character name (sent in lower case) |
 | Link | How commands reach other boxes: MQRemote, DanNet, EQBC or Manual |
 | Pong | The answer a box sends back over MQRemote: `/provisions pong token name combat food drink` |
 

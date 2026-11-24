@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.3
+  VERSION : 2.3.4
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
@@ -73,7 +73,7 @@ matters.
 | RGMercs | Paused during the hand out, handed back during a fight | Optional |
 
 Casting goes through MQ2Cast (`/casting "spell|gem8" -maxtries|5`), which
-recasts on fizzles and interrupts and reports the reason in `Cast.Result`.
+keeps casting through failures up to `-maxtries` and reports the result in `Cast.Result`.
 If MQ2Cast is not loaded the script loads it for the job and unloads it
 after, with `noauto` so MacroQuest.ini is not changed. If it cannot be loaded, or the option is turned off, plain `/cast`
 is used.

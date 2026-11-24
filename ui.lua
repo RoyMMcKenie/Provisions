@@ -1,8 +1,9 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.3
-  CHANGES     : 2.3.3  Tooltip and comment fixes (other box loading, trade
+  VERSION     : 2.3.4
+  CHANGES     : 2.3.4  The MQ2Cast tooltip matches the docs.
+                2.3.3  Tooltip and comment fixes (other box loading, trade
                        range, ImGui waits).
                 2.3.2  Adds the "Load the link plugin on other boxes"
                        checkbox under the link choice. Text says
@@ -523,7 +524,7 @@ local function drawOptions()
     checkbox('Walk to members with MQ2Nav', 'useNav',   -- setting useNav
         'Walk into trade range when a member is too far away.')   -- hover help for useNav
     checkbox('Cast with MQ2Cast (auto retry fizzles)', 'useMQ2Cast',   -- setting useMQ2Cast
-        'MQ2Cast detects fizzles and interrupts and recasts up to Max tries. Loaded for the job if needed.')   -- hover help for useMQ2Cast
+        'MQ2Cast recasts after a failed cast, up to Max tries. Loaded for the job if needed.')   -- hover help for useMQ2Cast
     checkbox('Meditate when out of mana', 'medForMana',   -- setting medForMana
         'Sit and wait for mana instead of skipping the cast.')   -- hover help for medForMana
     checkbox('Restore borrowed spell gem', 'restoreGem',   -- setting restoreGem

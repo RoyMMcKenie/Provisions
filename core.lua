@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.3
-  CHANGES     : 2.3.3  Comment fixes only (out of zone spawn ID, trade range,
+  VERSION     : 2.3.4
+  CHANGES     : 2.3.4  Comment fixes (XTHaterCount has no doc description,
+                       out of zone spawn ID).
+                2.3.3  Comment fixes only (out of zone spawn ID, trade range,
                        waiting loops).
                 2.3.2  Adds the loadOnOtherBoxes setting, off by default.
                        Help text now says /provisions.
@@ -54,7 +56,7 @@
 
   READING GUIDE (for future you)
     - "Yield" means hand control back to MacroQuest for a moment so the game
-      and the window keep running. mq.delay is the only thing that yields.
+      and the window keep running. In this package mq.delay is the only call that yields.
     - "Job" means one press of Hand Out, from start to cleanup.
     - "Hold" means the job is waiting at a safe point, either because the
       operator pressed Pause or because Combat Hold saw a fight.
@@ -497,7 +499,7 @@ end
 -- WHERE: Read by ui.lua and init.lua, written by core.refreshRoster.
 -- HOW  : Each row:
 --          name     string  character name (also the key for the tick)
---          id       number  spawn id in this zone, nil when out of zone
+--          id       number  spawn id in this zone, nil or 0 when out of zone
 --          isSelf   bool    true for the caster's own row
 --          isMerc   bool    true for a mercenary (cannot trade)
 --          present  bool    true when in this zone
@@ -762,11 +764,13 @@ end
   WHY   : Nothing can be handed out while being attacked, and a summon spell
           will only be interrupted. Combat Hold uses this.
   WHERE : core.holdWanted, init.lua checkpoint, delivery.lua accept wait.
-  HOW   : Two documented MacroQuest values. Me.CombatState reads COMBAT
-          while in combat (it returns ACTIVE on clients that lack the
-          feature). Me.XTHaterCount counts mobs on the extended target
-          window that are attacking you, which catches a fight that has
-          started before the combat state changes.
+  HOW   : Two values from the MacroQuest character data type page.
+          Me.CombatState reads COMBAT while in combat (the docs say it
+          returns ACTIVE on clients that lack the feature).
+          Me.XTHaterCount is listed there without a description; the
+          name says it counts haters on the extended target window, and
+          it is used as a second sign of a fight in case the combat state
+          is slow to change.
   WHEN  : At every checkpoint and while waiting on a trade.
 ----------------------------------------------------------------------------]]
 function core.inCombat()
