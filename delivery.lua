@@ -1,8 +1,11 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.1
-  CHANGES     : 2.3.1  Removed real character names from a comment.
+  VERSION     : 2.3.2
+  CHANGES     : 2.3.2  Comments and the pong command say /provisions.
+                       loadOnOthers now runs only when loadOnOtherBoxes is
+                       on.
+                2.3.1  Removed real character names from a comment.
                 2.3.0  No change in this file.
                 2.2.0  Adds ensureLink: when the chosen link plugin is not
                        loaded on the caster it is loaded with the documented
@@ -76,7 +79,7 @@
         failed  a problem on the caster's side, such as a failed pickup
     - The "link" is how commands reach other boxes. MQRemote (the
       default) can only send commands, so questions use a round trip: we
-      send a command that makes the other box send "/prov pong ..." back
+      send a command that makes the other box send "/provisions pong ..." back
       to us with its own values filled in. See askMQRemote.
 ==========================================================================]]--
 
@@ -463,7 +466,8 @@ end
   WHY   : A box without MQRemote cannot hear an MQRemote command, so the
           only way to load MQRemote there from here is through another
           plugin such as DanNet, which many setups already run.
-  WHERE : init.lua linkCheck, after the first round of questions.
+  WHERE : init.lua linkCheck, after the first round of questions, and
+          only when core.settings.loadOnOtherBoxes is on (off by default).
   HOW   : Tries the LINKS entries other than the chosen one, in a fixed
           order (DanNet, EQBC, MQRemote). The first one whose plugin is
           loaded here sends /plugin <name> load to every name. The caller
@@ -491,8 +495,8 @@ end
 --        question.
 -- WHY  : MQRemote only sends commands; it has no documented way to read a
 --        value back from another box. The workaround is to ask the other
---        box to send a /prov pong command back to us with its values filled
---        in, which our own /prov handler stores here. The token makes sure
+--        box to send a /provisions pong command back to us with its values filled
+--        in, which our own /provisions handler stores here. The token makes sure
 --        an old, late answer is never mistaken for the current one.
 -- WHERE: delivery.onPong writes; askMQRemote reads.
 -- HOW  : Plain tables.
@@ -505,10 +509,10 @@ local replies, nextToken = {}, 0
   WHAT  : Stores an answer that another box sent back through MQRemote.
   WHY   : This is the receiving half of the question and answer trick
           described above.
-  WHERE : init.lua onCommand, for /prov pong ... lines.
+  WHERE : init.lua onCommand, for /provisions pong ... lines.
   HOW   : All arguments arrive as text. Numbers are converted; a missing or
           non numeric count is stored as nil, meaning "unknown".
-  WHEN  : Whenever a /prov pong command arrives, which MacroQuest runs
+  WHEN  : Whenever a /provisions pong command arrives, which MacroQuest runs
           while the job waits in mq.delay.
 ----------------------------------------------------------------------------]]
 function delivery.onPong(token, name, combat, food, drink)
@@ -552,11 +556,11 @@ end
   HOW   : 1. Take a new token.
           2. Send, with /noparse in front so the caster does NOT fill in the
              ${} values itself:
-               /rc server <Name> /rc server <Me> /prov pong <token>
+               /rc server <Name> /rc server <Me> /provisions pong <token>
                    ${Me.CleanName} ${Me.CombatState} <food> <drink>
-             The other box receives "/rc server <Me> /prov pong ...", fills
+             The other box receives "/rc server <Me> /provisions pong ...", fills
              in its own ${} values (the MQRemote docs show this /noparse
-             pattern), and sends /prov pong back to us.
+             pattern), and sends /provisions pong back to us.
           3. Wait until delivery.onPong has stored a reply with our token.
   WHEN  : Link checks, Top up planning, and before each trade attempt.
 ----------------------------------------------------------------------------]]
@@ -564,7 +568,7 @@ local function askMQRemote(name, timeoutMs)
     nextToken = nextToken + 1
     local token, me = nextToken, (mq.TLO.Me.CleanName() or '')
     local s = core.settings   -- item names come from settings
-    local back = string.format('/rc server %s /prov pong %d ${Me.CleanName} ${Me.CombatState} %s %s',   -- the command the other box runs
+    local back = string.format('/rc server %s /provisions pong %d ${Me.CleanName} ${Me.CombatState} %s %s',   -- the command the other box runs
         me, token, countExpr(s.foodItem), countExpr(s.drinkItem))   -- the command the other box runs
     core.cmd('%s', string.format('/noparse /rc server %s %s', name, back))
     -- Wait for an answer carrying this token.
@@ -1029,7 +1033,7 @@ return delivery   -- hand the module table to require('provisions.delivery')
     - Add a link method: an entry in LINKS, a branch in delivery.remote,
       a branch in delivery.probe if it can answer questions, and a radio
       button in ui.lua drawOptions.
-    - The pong reply format is "/prov pong <token> <name> <combat> <food>
+    - The pong reply format is "/provisions pong <token> <name> <combat> <food>
       <drink>". If you add a field, change askMQRemote, delivery.onPong
       and init.lua onCommand together.
     - Delivery is verified by recounting the caster's bags. Never let the

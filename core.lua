@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.1
-  CHANGES     : 2.3.1  No change in this file.
+  VERSION     : 2.3.2
+  CHANGES     : 2.3.2  Adds the loadOnOtherBoxes setting, off by default.
+                       Help text now says /provisions.
+                2.3.1  No change in this file.
                 2.3.0  No change in this file.
                 2.2.0  Adds the linkLoadRequested job flag and
                        core.requestLinkLoad, so picking a link in Options
@@ -300,6 +302,12 @@ core.DEFAULTS = {
     -- busy check): 'mqremote' (default), 'dannet', 'eqbc' or 'none'
     -- (Manual). EQBC can only press Trade; it cannot answer questions.
     acceptMethod    = 'mqremote',
+    -- Load the link plugin on other boxes (new in 2.3.2). Off by default so
+    -- nothing runs on another character unless the operator turns it on.
+    -- When on, a member who does not answer the link check is sent
+    -- /plugin <name> load through another link already up here (DanNet or
+    -- EQBC), then asked once more.
+    loadOnOtherBoxes = false,
     -- Seconds to wait for the receiver to accept before cancelling.
     tradeTimeoutSec = 12,
 
@@ -589,7 +597,7 @@ end
 
   WHAT  : Ticks or unticks every eligible member at once.
   WHY   : Feeding the whole group is the common case and should be one click.
-  WHERE : ui.lua Select all and Clear, /prov all in init.lua.
+  WHERE : ui.lua Select all and Clear, /provisions all in init.lua.
   HOW   : Loops the roster, skipping mercenaries.
   WHEN  : On button press or command.
 ----------------------------------------------------------------------------]]
@@ -658,7 +666,7 @@ core.job = {
   WHAT  : Ask for a job to start, or ask the running job to stop.
   WHY   : Safe from the window and from slash commands because neither
           waits; they only flip flags that init.lua's main loop acts on.
-  WHERE : ui.lua buttons, /prov go and /prov stop.
+  WHERE : ui.lua buttons, /provisions go and /provisions stop.
   HOW   : request is ignored while a job runs. stop also clears Pause so a
           paused job can wind down at once.
   WHEN  : On operator input.
@@ -678,7 +686,7 @@ end
   WHY   : The check waits for answers from other boxes, which the window
           and slash commands may not do, so like core.request it only sets
           a flag.
-  WHERE : ui.lua Check links button and /prov check.
+  WHERE : ui.lua Check links button and /provisions check.
   HOW   : Ignored while a job or a check runs. init.lua tick picks it up.
   WHEN  : On operator input.
 ----------------------------------------------------------------------------]]
@@ -722,7 +730,7 @@ end
   WHY   : The operator may need a moment without losing progress. Pause
           never cuts a cast or an open trade short; the hold starts at the
           next checkpoint. RGMercs stays paused during a manual Pause.
-  WHERE : ui.lua Pause / Resume button, /prov pause and /prov resume.
+  WHERE : ui.lua Pause / Resume button, /provisions pause and /provisions resume.
   HOW   : Flip core.job.paused. The checkpoint code in init.lua does the
           actual holding.
   WHEN  : On operator input while a job runs.

@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/ARCHITECTURE.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.1
+  VERSION : 2.3.2
   WHAT    : Maintainer's map of the package: what each file does, how a job
             flows through them, how Stop, Pause and Combat Hold work, where
             every setting is used, and recipes for common changes.
@@ -32,15 +32,17 @@ If you only read one section, read this:
 
 | File | One line job | Requires |
 |---|---|---|
-| `init.lua` | Startup, `/prov`, main loop, job runner, checkpoint, trade queue, cleanup | all files |
+| `init.lua` | Startup, `/provisions`, main loop, job runner, checkpoint, trade queue, cleanup | all files |
 | `ui.lua` | ImGui window, never waits | core, delivery, casting |
 | `casting.lua` | Detect, memorise, cast, summon loop, MQ2Cast | core, delivery |
 | `delivery.lua` | Bag counts, cursor, pickup, walk, trade, link to other boxes (MQRemote, DanNet, EQBC) | core |
 | `core.lua` | Echo, cmd, abortable delay, settings, roster, job flags, combat check | nothing |
-| `dev/doc_audit.py` | Checks the documentation standard (PC only) | Python |
-| `dev/smoke_test.py` | Runs the code against a fake MacroQuest (PC only) | Python, lupa |
 | `LICENSE` | MIT license terms | |
-| `.gitignore` | Files git never uploads | |
+| `REDGUIDES.md` | RedGuides guide for MacroQuest Lua and its resource rules | |
+
+The maintainer's PC tools, `dev/doc_audit.py` (checks the documentation
+standard) and `dev/smoke_test.py` (runs the code against a fake MacroQuest),
+are kept with the maintainer and are not part of the release or the zip.
 
 Requires only point downward in this table. Keep it that way. A file that
 requires something above it creates a loop and Lua will fail to load.
@@ -59,7 +61,7 @@ requires something above it creates a loop and Lua will fail to load.
 ## Flow of one hand out
 
 ```
-Hand Out button / /prov go
+Hand Out button / /provisions go
   core.request()                        sets job.requested = true
 main loop (init.lua)
   tick()
@@ -69,7 +71,7 @@ main loop (init.lua)
       core.selectedRows()               ticked, in zone, not merc
       linkCheck()                       link plugin here? every member answers?
         delivery.ensureLink()           Plugin TLO; /plugin <name> load if missing
-        delivery.loadOnOthers()         silent members: /plugin load via DanNet or EQBC
+        delivery.loadOnOthers()         silent members, if loadOnOtherBoxes: /plugin load via DanNet or EQBC
         delivery.probe()                MQRemote pong round trip, or DanNet peers + /dquery
       /rgl pause                        if RGMercs is running
       casting.beginJob()                fizzle events on, load MQ2Cast if needed
@@ -171,11 +173,11 @@ no documented way to read a value from another box, so a question is a
 round trip:
 
 ```
-caster:  /noparse /rc server Tank /rc server Cleric /prov pong 7
+caster:  /noparse /rc server Tank /rc server Cleric /provisions pong 7
              ${Me.CleanName} ${Me.CombatState} ${FindItemCount[=bread]} ${FindItemCount[=water]}
-Tank:    receives "/rc server Cleric /prov pong 7 ${...}", fills in its own
+Tank:    receives "/rc server Cleric /provisions pong 7 ${...}", fills in its own
          values, sends it on
-caster:  /prov pong 7 Tank ACTIVE 5 3   ->  delivery.onPong stores it
+caster:  /provisions pong 7 Tank ACTIVE 5 3   ->  delivery.onPong stores it
 ```
 
 `/noparse` stops the caster filling in the `${}` values itself; the MQRemote
@@ -229,6 +231,7 @@ with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 | `summonTimeoutMin` | casting.summonUntil |
 | `medForMana`, `medTimeoutSec` | casting.waitForMana |
 | `preserveOwnStock`, `topUp` | init.planNeeds |
+| `loadOnOtherBoxes` | init.linkCheck, ui.drawOptions |
 | `acceptMethod` | delivery.linkReady, ensureLink, loadOnOthers, remote, probe, init.linkCheck, loadLinkNow, ui.drawOptions |
 | `tradeTimeoutSec` | delivery.waitForAccept |
 | `tradeRange`, `useNav`, `navTimeoutSec` | delivery.moveInRange, ui.drawRoster |
@@ -289,8 +292,9 @@ labels. `dev/doc_audit.py` checks all of the Lua rules.
    README.md if anything the operator sees changed.
 6. Run `python dev/doc_audit.py` and fix anything it reports.
 7. Run `python dev/smoke_test.py` and make sure all scenarios pass.
-8. Test in game with Debug trace on.
-9. Commit with a message that starts with the version, for example
+8. Test in game with Debug trace on, and on someone else's setup too.
+9. Check the RedGuides resource rules and REDGUIDES.md still hold.
+10. Commit with a message that starts with the version, for example
    `2.0.1: fix busy retry timing`, and push to GitHub.
 
 ## Glossary
@@ -311,7 +315,7 @@ labels. `dev/doc_audit.py` checks all of the Lua rules.
 | Reserve | Stock the caster keeps and never trades away |
 | Peer | A box on DanNet, addressed by lower case name |
 | Link | How commands reach other boxes: MQRemote, DanNet, EQBC or Manual |
-| Pong | The answer a box sends back over MQRemote: `/prov pong token name combat food drink` |
+| Pong | The answer a box sends back over MQRemote: `/provisions pong token name combat food drink` |
 
 <!--
   END OF FILE : provisions/ARCHITECTURE.md

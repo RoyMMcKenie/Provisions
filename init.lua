@@ -1,8 +1,12 @@
 --[[==========================================================================
   FILE        : provisions/init.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.1
-  CHANGES     : 2.3.1  No change in this file.
+  VERSION     : 2.3.2
+  CHANGES     : 2.3.2  The command is now /provisions (RedGuides rule: one
+                       command named after the script). linkCheck only
+                       loads the link plugin on other boxes when the new
+                       loadOnOtherBoxes option is on. Adds the mq64 note.
+                2.3.1  No change in this file.
                 2.3.0  No change in this file.
                 2.2.0  The link plugin is now loaded automatically. tick
                        handles the new linkLoadRequested flag (set when a
@@ -33,7 +37,7 @@
                        actions.lua). Full history in CHANGELOG.md.
 
   WHAT  : The entry point and the job runner. Loads settings, registers the
-          /prov command and the window, then loops: when Hand Out is
+          /provisions command and the window, then loops: when Hand Out is
           pressed it runs one complete job (summon, then trade to each
           ticked member) and always cleans up afterwards.
 
@@ -47,12 +51,12 @@
           lua/provisions/init.lua. Requires every other file.
 
   HOW   : 1. startup: load settings, detect spells, fill the roster, bind
-             /prov, register the window, install the checkpoint.
+             /provisions, register the window, install the checkpoint.
           2. main loop: tick (runs a requested job), check the game state,
              mq.delay(100).
           3. shutdown: save, unbind, say goodbye.
 
-  WHEN  : From /lua run provisions until /prov quit, camping, or
+  WHEN  : From /lua run provisions until /provisions quit, camping, or
           /lua stop provisions.
 
   READING GUIDE (for future you)
@@ -80,7 +84,7 @@ local ui       = require('provisions.ui')         -- the window
 
 --- Main loop flag --------------------------------------------------------------------
 -- WHAT : true while the script should keep running.
--- WHY  : /prov quit sets it false so the loop ends and shutdown runs.
+-- WHY  : /provisions quit sets it false so the loop ends and shutdown runs.
 -- WHERE: onCommand and the main loop.
 -- HOW  : Plain boolean.
 -- WHEN : Read every loop pass.
@@ -207,6 +211,9 @@ end
 -- WHEN : Only when a member did not answer the first question.
 local LOAD_WAIT_MS = 4000
 
+-- mq64 note: the mq64 module would let a Druid summon a seven course banquet
+-- with candelabras, but mq64 is not real, so we cast Summon Food like everyone.
+
 --[[--------------------------------------------------------------------------
   loadLinkNow()
 
@@ -247,15 +254,17 @@ end
           accept command, and the only sign was three timeouts per member
           after all the summoning was done. Checking first names the
           problem in plain words before any mana is spent.
-  WHERE : run (before summoning) and checkOnly (/prov check, Check links).
+  WHERE : run (before summoning) and checkOnly (/provisions check, Check links).
   HOW   : 1. delivery.ensureLink: loads the plugin here when it is
              missing; if that fails print its message and return nil.
           2. Clear any old row.probe values.
           3. MQRemote and DanNet: delivery.probe each member. An answer is
              stored in row.probe (Top up reads it).
-          4. Members who did not answer: delivery.loadOnOthers sends them
-             /plugin <name> load through another link when one is up here.
-             After LOAD_WAIT_MS they are asked once more.
+          4. Members who did not answer, only when the loadOnOtherBoxes
+             option is on: delivery.loadOnOthers sends them /plugin <name>
+             load through another link when one is up here. After
+             LOAD_WAIT_MS they are asked once more. Off by default, so
+             nothing runs on another box unless the operator asked.
           5. Still no answer: the member is dropped, gets a red
              "no <link>" result, and is listed in one warning that says
              what to type on that character.
@@ -290,9 +299,10 @@ local function linkCheck(rows, wantCounts)
     end
 
     -- Second round: load the plugin on the silent boxes through another
-    -- link if one is up here, then ask them once more.
+    -- link if one is up here, then ask them once more. Only when the
+    -- operator turned on loadOnOtherBoxes (RedGuides: safe by default).
     local via = nil   -- name of the link the load went through, if any
-    if #silent > 0 then
+    if #silent > 0 and s.loadOnOtherBoxes then   -- opt in, off by default
         local names = {}
         for _, row in ipairs(silent) do names[#names + 1] = row.name end
         via = delivery.loadOnOthers(names)   -- nil when no other link is up here
@@ -317,6 +327,9 @@ local function linkCheck(rows, wantCounts)
     if #missing > 0 then   -- someone did not answer
         core.warn('No %s answer from: %s. On each of them type /plugin %s load, and make sure they are on the same server.',   -- one yellow line naming them all
             link, table.concat(missing, ', '), link == 'DanNet' and 'MQ2DanNet' or link)   -- MQ2DanNet is the plugin name for DanNet
+        if not s.loadOnOtherBoxes then   -- tell the operator about the opt in
+            core.warn('Or turn on "Load the link plugin on other boxes" in Options to have Provisions send that command for you.')
+        end
         if link == 'DanNet' then   -- the VPN problem from the first live test
             core.warn('DanNet tip: /dnet interface on each character must point at the same network.')
         end
@@ -332,7 +345,7 @@ end
   WHY   : Lets the operator test MQRemote (or DanNet) on every box before
           a real hand out, for example after logging in.
   WHERE : tick, when core.job.checkRequested is set by the Check links
-          button or /prov check.
+          button or /provisions check.
   HOW   : Refresh the roster, take the ticked rows, linkCheck with counts,
           then show what each box carries in the Last result column and
           a summary on the status line.
@@ -676,42 +689,42 @@ end
 
   WHAT  : Lists the slash commands in chat.
   WHY   : Discoverability without opening the README.
-  WHERE : /prov help and any unknown /prov argument.
+  WHERE : /provisions help and any unknown /provisions argument.
   HOW   : core.echo lines.
   WHEN  : On request.
 ----------------------------------------------------------------------------]]
 local function printHelp()
-    core.echo('/prov          toggle the window')
-    core.echo('/prov go       hand out with current settings')
-    core.echo('/prov stop     stop a running hand out')   -- Stop button equivalent
-    core.echo('/prov pause    hold at the next safe point')   -- Pause button equivalent
-    core.echo('/prov resume   carry on after a pause')   -- Resume button equivalent
-    core.echo('/prov all      tick every eligible group member')   -- Select all button equivalent
-    core.echo('/prov check    test the link to every ticked member')   -- Check links button equivalent
-    core.echo('/prov food N   set food per member')   -- sets Food each
-    core.echo('/prov drink N  set drink per member')   -- sets Drink each
-    core.echo('/prov quit     save and end the script')   -- clean exit that saves settings
+    core.echo('/provisions          toggle the window')
+    core.echo('/provisions go       hand out with current settings')
+    core.echo('/provisions stop     stop a running hand out')   -- Stop button equivalent
+    core.echo('/provisions pause    hold at the next safe point')   -- Pause button equivalent
+    core.echo('/provisions resume   carry on after a pause')   -- Resume button equivalent
+    core.echo('/provisions all      tick every eligible group member')   -- Select all button equivalent
+    core.echo('/provisions check    test the link to every ticked member')   -- Check links button equivalent
+    core.echo('/provisions food N   set food per member')   -- sets Food each
+    core.echo('/provisions drink N  set drink per member')   -- sets Drink each
+    core.echo('/provisions quit     save and end the script')   -- clean exit that saves settings
 end
 
 --[[--------------------------------------------------------------------------
   onCommand(...)
 
-  WHAT  : Handler for /prov.
+  WHAT  : Handler for /provisions.
   WHY   : Lets the operator, a hotkey, or another box (through /rc or
           /dex) work the package without the window. Also receives the
-          "/prov pong" answers other boxes send back during link checks.
+          "/provisions pong" answers other boxes send back during link checks.
   WHERE : Bound with mq.bind in startup.
   HOW   : First word picks the action. Never waits; go only requests a job.
           Pause and resume work while a job holds, because the hold loop
           yields and MacroQuest runs commands during mq.delay.
-  WHEN  : Whenever /prov is typed or broadcast.
+  WHEN  : Whenever /provisions is typed or broadcast.
 ----------------------------------------------------------------------------]]
 local function onCommand(...)
-    local args = { ... }                  -- words typed after /prov
+    local args = { ... }                  -- words typed after /provisions
     local sub  = (args[1] or ''):lower()  -- first word, any case
     local s    = core.settings
     if sub == '' then
-        ui.open = not ui.open             -- bare /prov toggles the window
+        ui.open = not ui.open             -- bare /provisions toggles the window
     elseif sub == 'go' then
         core.request()
     elseif sub == 'stop' then
@@ -725,7 +738,7 @@ local function onCommand(...)
         core.setAll(true)   -- tick everyone eligible
         core.save()   -- remember the ticks
         core.echo('All eligible members ticked.')   -- confirm in chat
-    elseif sub == 'food' or sub == 'drink' then   -- set a count from chat, e.g. /prov food 15
+    elseif sub == 'food' or sub == 'drink' then   -- set a count from chat, e.g. /provisions food 15
         local n = core.clamp(tonumber(args[2]) or 0, 0, 80)   -- 0 to 80, like the window
         s[sub .. 'Count'] = n             -- foodCount or drinkCount
         core.save()
@@ -733,7 +746,7 @@ local function onCommand(...)
     elseif sub == 'check' then   -- same as the Check links button
         core.requestCheck()
     elseif sub == 'pong' then   -- an answer another box sent back over MQRemote
-        -- /prov pong <token> <name> <combat> <food> <drink>; silent on purpose.
+        -- /provisions pong <token> <name> <combat> <food> <drink>; silent on purpose.
         delivery.onPong(args[2], args[3], args[4], args[5], args[6])
     elseif sub == 'quit' then
         core.stop()                       -- wind down a running job first
@@ -763,9 +776,9 @@ local function startup()
     core.refreshRoster(true)
     core.bindCheckpoint(checkpoint)          -- Pause and Combat Hold logic
     core.requestLinkLoad()                   -- load MQRemote now if it is missing
-    mq.bind('/prov', onCommand)
+    mq.bind('/provisions', onCommand)
     mq.imgui.init('provisions', ui.render)
-    core.good('Loaded. Type /prov help for commands.')
+    core.good('Loaded. Type /provisions help for commands.')
 end
 
 startup()   -- one time setup before the main loop
@@ -791,14 +804,14 @@ end
 -- Shutdown: save pending edits, release the command.
 ui.flushSave(true)
 core.save()
-mq.unbind('/prov')
+mq.unbind('/provisions')
 core.echo('Ended.')   -- last line before the script ends
 
 --[[==========================================================================
   END OF FILE : provisions/init.lua
 
   STARTUP   : /lua run provisions
-  COMMANDS  : /prov, go, stop, pause, resume, all, check, food N, drink N,
+  COMMANDS  : /provisions, go, stop, pause, resume, all, check, food N, drink N,
               quit, help. "pong" is internal: other boxes send it back.
 
   DEPENDENCIES : mq, provisions.core, delivery, casting, ui.
@@ -818,5 +831,5 @@ core.echo('Ended.')   -- last line before the script ends
     - New slash commands go in onCommand, printHelp and the README
       Commands table together.
     - /lua stop provisions ends immediately without the shutdown lines;
-      /prov quit is the clean way out.
+      /provisions quit is the clean way out.
 ==========================================================================]]--

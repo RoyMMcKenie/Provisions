@@ -11,6 +11,39 @@
 
 # Changelog
 
+## 2.3.2 (2026-11-24)
+
+Brings the package in line with the RedGuides resource rules and
+REDGUIDES.md.
+
+Changed
+
+- The command is now `/provisions` (one command named after the script).
+  Every subcommand is the same: `/provisions go`, `/provisions pause`,
+  `/provisions check` and so on. Hotkeys that used `/prov` need updating.
+- Loading the link plugin on other boxes is now opt in. A new Options
+  checkbox, "Load the link plugin on other boxes", is off by default. While
+  it is off, a box that does not answer is named with the command to type
+  there, and nothing is sent to it. Loading the plugin on the caster when
+  you pick a link is unchanged.
+
+New
+
+- REDGUIDES.md, the RedGuides guide for MacroQuest Lua, at the root.
+- The README states that Provisions downloads nothing and talks to no
+  outside server.
+
+Packaging
+
+- The PC test tools (dev/doc_audit.py, dev/smoke_test.py) and .gitignore
+  are no longer in the repository or the zip. The maintainer keeps the
+  tools. The zip carries only the Lua files and their documentation.
+
+Tests
+
+- Smoke test: remoteload turns the new option on; nolink checks that
+  nothing is loaded on another box while it is off. All 15 scenarios pass.
+
 ## 2.3.1 (2026-11-24)
 
 Documentation only, before the RedGuides release. No change in behaviour.

@@ -1,8 +1,11 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.3.1
-  CHANGES     : 2.3.1  No change in this file.
+  VERSION     : 2.3.2
+  CHANGES     : 2.3.2  Adds the "Load the link plugin on other boxes"
+                       checkbox under the link choice. Text says
+                       /provisions.
+                2.3.1  No change in this file.
                 2.3.0  The Food spell and Drink spell override boxes are now
                        drop downs (spellPicker). They list "Type your own..."
                        at the top, then "Auto" with the best detected spell,
@@ -65,7 +68,7 @@ local ui = {}
 
 --- Window visibility ---------------------------------------------------------------
 -- WHAT : true while the window is shown.
--- WHY  : /prov toggles it and the title bar X closes it.
+-- WHY  : /provisions toggles it and the title bar X closes it.
 -- WHERE: ui.render and init.lua onCommand.
 -- HOW  : ImGui.Begin returns the new value.
 -- WHEN : Every frame.
@@ -480,7 +483,8 @@ end
   WHY   : Settings changed rarely stay out of the way.
   WHERE : ui.render.
   HOW   : Link method radio buttons (MQRemote, DanNet, EQBC, Manual; a
-          pick also requests the plugin load), bound checkboxes and number boxes in
+          pick also requests the plugin load), the opt in checkbox for
+          loading the plugin on other boxes, bound checkboxes and number boxes in
           three groups (general, Combat Hold and busy members, limits),
           then the spell drop downs (spellPicker), item text boxes and
           Refresh spells. Locked while a
@@ -503,6 +507,9 @@ local function drawOptions()
             core.requestLinkLoad()   -- init.lua loads the plugin if it is missing
         end
     end
+    -- Opt in: load the link plugin on boxes that do not answer (off by default).
+    checkbox('Load the link plugin on other boxes', 'loadOnOtherBoxes',   -- setting loadOnOtherBoxes
+        'When a box does not answer the link check, send it /plugin <name> load through DanNet or EQBC if one is up here. Off by default.')   -- hover help for loadOnOtherBoxes
 
     -- General behaviour.
     checkbox('Top up only', 'topUp',
@@ -605,5 +612,5 @@ return ui   -- hand the module table to require('provisions.ui')
       core.requestLinkLoad, core.togglePause and core.stop. Never
       run job steps from here.
     - Change the 80 limit: both intInput lines in drawCounts, the clamps in
-      core.load and the /prov food and drink handler in init.lua.
+      core.load and the /provisions food and drink handler in init.lua.
 ==========================================================================]]--

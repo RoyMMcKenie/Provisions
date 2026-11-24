@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.3.1
+  VERSION : 2.3.2
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
@@ -41,22 +41,22 @@ The finished layout:
 
 ```
 <MacroQuest>/lua/provisions/
-    init.lua       entry point, job runner, Pause and Combat Hold, /prov
+    init.lua       entry point, job runner, Pause and Combat Hold, /provisions
     core.lua       chat output, settings, group roster, shared job flags
     casting.lua    spell detection and the summon loop (MQ2Cast)
     delivery.lua   bag handling, trading, link to other boxes
     ui.lua         the window
-    README.md   ARCHITECTURE.md   CHANGELOG.md   LICENSE   .gitignore
-    dev/doc_audit.py   dev/smoke_test.py      (PC tools, not used in game)
+    README.md   ARCHITECTURE.md   CHANGELOG.md   LICENSE   REDGUIDES.md
 ```
 
 For maintenance, start with ARCHITECTURE.md. It maps every file, shows the
 full flow of a hand out, lists where each setting is used, and has recipes
 for common changes. Every Lua file also carries a reading guide in its
 header, a doc block on every function, a comment on every line of code, and
-a "how to edit safely" section in its footer. After any edit, run
-`python dev/doc_audit.py` to confirm nothing is undocumented and
-`python dev/smoke_test.py` to test the logic without logging in.
+a "how to edit safely" section in its footer. The maintainer's PC test
+tools (a documentation audit and an offline smoke test) are kept outside the
+release, so the zip carries only what the game and its reader need.
+REDGUIDES.md is the RedGuides guide for writing and publishing MacroQuest Lua.
 
 Every file requires its siblings as `provisions.<name>`, so the folder name
 matters.
@@ -87,9 +87,14 @@ Provisions loads it for you where it can:
 
 - On the caster: when you pick MQRemote under Options, when the script
   starts, and before every hand out or link check.
-- On the other characters: if one does not answer and DanNet (or EQBC) is
-  loaded on the caster, Provisions sends `/plugin MQRemote load` to that
-  character through it, waits 4 seconds and asks again.
+- On the other characters, only if you turn on "Load the link plugin on
+  other boxes" in Options (off by default): if one does not answer and
+  DanNet (or EQBC) is loaded on the caster, Provisions sends
+  `/plugin MQRemote load` to that character through it, waits 4 seconds and
+  asks again.
+
+Provisions downloads nothing and talks to no outside server. Everything goes
+through the MacroQuest plugins named above.
 
 `/plugin MQRemote load` also tells MacroQuest to load it by itself next
 session. If a character has no other link either, type this once there:
@@ -100,7 +105,7 @@ session. If a character has no other link either, type this once there:
 
 Provisions sends commands with `/rc server <Name> <command>`. MQRemote can
 send commands but cannot read values back, so to ask a box a question the
-caster sends a command that makes that box send `/prov pong ...` back,
+caster sends a command that makes that box send `/provisions pong ...` back,
 with its own combat state and item counts filled in.
 
 Before every hand out Provisions checks the link:
@@ -110,7 +115,7 @@ Before every hand out Provisions checks the link:
 - Every ticked member must answer. Anyone who does not is left out, shown
   in red as "no MQRemote", and named in chat.
 
-Press Check links (or type `/prov check`) to run the same check without
+Press Check links (or type `/provisions check`) to run the same check without
 summoning anything. Each member shows what it carries.
 
 DanNet still works: pick DanNet under Options. The check then also looks
@@ -169,20 +174,20 @@ chat. Press Hand Out again later to serve them.
 
 | Command | Action |
 |---|---|
-| `/prov` | Toggle the window |
-| `/prov go` | Hand out with current settings |
-| `/prov pause` | Hold at the next safe point |
-| `/prov resume` | Carry on after a pause |
-| `/prov stop` | Stop a running hand out |
-| `/prov all` | Tick every eligible member |
-| `/prov check` | Check the link to every ticked member, without summoning |
-| `/prov food N` | Set food per member |
-| `/prov drink N` | Set drink per member |
-| `/prov quit` | Save and end |
-| `/prov help` | List the commands |
+| `/provisions` | Toggle the window |
+| `/provisions go` | Hand out with current settings |
+| `/provisions pause` | Hold at the next safe point |
+| `/provisions resume` | Carry on after a pause |
+| `/provisions stop` | Stop a running hand out |
+| `/provisions all` | Tick every eligible member |
+| `/provisions check` | Check the link to every ticked member, without summoning |
+| `/provisions food N` | Set food per member |
+| `/provisions drink N` | Set drink per member |
+| `/provisions quit` | Save and end |
+| `/provisions help` | List the commands |
 
-`/prov go` can be sent from another box: `/rc server Castername /prov go`.
-`/prov pong` is used internally for answers from other boxes.
+`/provisions go` can be sent from another box: `/rc server Castername /provisions go`.
+`/provisions pong` is used internally for answers from other boxes.
 
 ## Spells used
 
@@ -207,6 +212,7 @@ cursor after the first cast.
 | Option | Default | Meaning |
 |---|---|---|
 | Talk to other boxes via | MQRemote | MQRemote, DanNet, EQBC or Manual. EQBC can only press Trade. Manual means you or another script accepts. A choice saved by an older version is kept. |
+| Load the link plugin on other boxes | Off | When a box does not answer, send it `/plugin <name> load` through DanNet or EQBC if one is up on the caster. |
 | Top up only | Off | Ask each box its current count (MQRemote or DanNet) and give only the shortfall. |
 | Keep my existing stock | On | Never hand out food already in your bags. |
 | Pause RGMercs | On | `/rgl pause` during the job, only if RGMercs is running. |
@@ -241,7 +247,7 @@ Turn on Debug trace in Options. Every command sent is echoed in chat.
 | Partial counts lift the whole stack | QuantityWnd control names differ on your client. Check `QTYW_slider` and `QTYW_Accept_Button` with `/windows`. |
 | Item stays on cursor at the target | Out of range or line of sight, or the member is fighting. It will be tried again. |
 | "MQRemote could not be loaded" | Type `/plugin MQRemote load` on the caster and read the MacroQuest message. The plugin file may be missing from your MacroQuest build. |
-| A member shows "no MQRemote" | MQRemote is not loaded on that character and could not be loaded through DanNet, or the character is on another server. Type `/plugin MQRemote load` there, then press Check links. |
+| A member shows "no MQRemote" | MQRemote is not loaded on that character (and was not loaded through DanNet, which needs the "Load the link plugin on other boxes" option), or the character is on another server. Type `/plugin MQRemote load` there, then press Check links. |
 | Quick manual link test | On the caster type `/rc server Name /sit`. The other character should sit. |
 | A member shows "no DanNet" | That character is missing from `${DanNet.Peers}`. Check `/dnet interface` on both; a VPN can move DanNet to the wrong network. |
 | Trade times out | The receiver did not get the accept command. Press Check links. |
