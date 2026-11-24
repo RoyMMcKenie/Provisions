@@ -1,0 +1,34 @@
+# =============================================================================
+#   FILE    : provisions/.gitignore
+#   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
+#   VERSION : 2.0.0
+#   WHAT    : Files git should never upload.
+#   WHY     : Keeps the repository to source and documentation only. Python
+#             cache files from the dev tools and editor clutter add noise.
+#   WHERE   : Root of the repository (the provisions folder).
+#   HOW     : One pattern per line; # starts a comment.
+#   WHEN    : Read by git on every commit.
+# =============================================================================
+
+# Python cache created when dev/doc_audit.py or dev/smoke_test.py runs.
+__pycache__/
+*.pyc
+
+# Packaged zips are built from the source; the source is what gets versioned.
+*.zip
+
+# Per character settings files, in case one is ever copied here by mistake.
+# The real ones live in <MacroQuest>/config/, never in this folder.
+provisions_*.lua
+clericfood_*.lua
+
+# Editor and operating system clutter.
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+#   END OF FILE : provisions/.gitignore
+# =============================================================================

@@ -1,31 +1,53 @@
 <!--
-  FILE    : clericfood/README.md
-  PACKAGE : ClericFood Lua (MacroQuest / EverQuest)
-  VERSION : 1.3.1
+  FILE    : provisions/README.md
+  PACKAGE : Provisions Lua (MacroQuest / EverQuest)
+  VERSION : 2.0.0
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
-  WHERE   : Lives beside init.lua in <MacroQuest>/lua/clericfood/.
+  WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
   WHEN    : Read before first run and when something misbehaves.
 -->
 
-# ClericFood
+# Provisions
 
-A MacroQuest Lua package that lets a cleric summon food and drink and trade it
-to group members picked from a checkbox list, with separate food and drink
-counts.
+A MacroQuest Lua package for any class that can summon food and drink
+(Cleric, Druid, Shaman, Magician, Beastlord). It summons food and drink and
+trades it to group members picked from a checkbox list, with separate food
+and drink counts. It keeps casting through fizzles until it has enough,
+holds when you are attacked, and comes back later for members who are busy
+fighting.
+
+Formerly ClericFood. Existing ClericFood settings are imported the first
+time Provisions runs.
 
 ## Install
 
-Copy the folder, named exactly `clericfood`, into your MacroQuest `lua`
-directory:
+The package must sit in a folder named `provisions` inside your MacroQuest
+`lua` directory.
+
+With git, from the MacroQuest `lua` directory:
 
 ```
-<MacroQuest>/lua/clericfood/
-    init.lua      ui.lua       actions.lua
-    spells.lua    trade.lua    inventory.lua
-    group.lua     config.lua   utils.lua
-    README.md     ARCHITECTURE.md   CHANGELOG.md
-    dev/doc_audit.py    dev/smoke_test.py     (PC tools, not used in game)
+git clone https://github.com/RoyMMcKenie/Provisions.git provisions
+```
+
+Without git: on the GitHub page choose Code, then Download ZIP, unzip it,
+and rename the folder from `Provisions-main` to `provisions`.
+
+If you had ClericFood installed, you can delete the old `lua/clericfood`
+folder after the first run.
+
+The finished layout:
+
+```
+<MacroQuest>/lua/provisions/
+    init.lua       entry point, job runner, Pause and Combat Hold, /prov
+    core.lua       chat output, settings, group roster, shared job flags
+    casting.lua    spell detection and the summon loop (MQ2Cast)
+    delivery.lua   bag handling, trading, DanNet queries
+    ui.lua         the window
+    README.md   ARCHITECTURE.md   CHANGELOG.md   LICENSE   .gitignore
+    dev/doc_audit.py   dev/smoke_test.py      (PC tools, not used in game)
 ```
 
 For maintenance, start with ARCHITECTURE.md. It maps every file, shows the
@@ -36,63 +58,106 @@ a "how to edit safely" section in its footer. After any edit, run
 `python dev/doc_audit.py` to confirm nothing is undocumented and
 `python dev/smoke_test.py` to test the logic without logging in.
 
-Every module requires its siblings as `clericfood.<name>`, so the folder name
+Every file requires its siblings as `provisions.<name>`, so the folder name
 matters.
 
 ### Plugins
 
 | Plugin | Needed for | Required |
 |---|---|---|
-| MQ2DanNet | Receiving box presses Trade, Top up counts | Recommended |
+| MQ2DanNet | Receiving box presses Trade, Top up counts, busy member check | Recommended |
 | MQ2EQBC | Alternative to DanNet for accepting | Optional |
 | MQ2Cast | Casting with automatic fizzle and interrupt retries | Recommended |
 | MQ2Nav | Walking into trade range | Optional |
+| RGMercs | Paused during the hand out, handed back during a fight | Optional |
 
 Casting goes through MQ2Cast (`/casting "spell|gem8" -maxtries|5`), which
-recasts on fizzles and interrupts and reports the reason in `Cast.Result`. If
-MQ2Cast is not loaded the script loads it for the job and unloads it after.
-If it cannot be loaded, or the option is turned off, plain `/cast` is used.
+recasts on fizzles and interrupts and reports the reason in `Cast.Result`.
+If MQ2Cast is not loaded the script loads it for the job and unloads it
+after. If it cannot be loaded, or the option is turned off, plain `/cast`
+is used.
 
 ## Run
 
 ```
-/lua run clericfood
+/lua run provisions
 ```
 
 1. Set Food each and Drink each (0 to 80, or use the 5 / 10 / 20 buttons).
 2. Tick the members to feed. Tick your own row to keep a set for yourself.
 3. Press Hand Out.
 
-The cleric memorises the summon spells into the borrowed gem if needed, casts
-until it carries enough for everyone, then walks to and trades each ticked
-member in turn. The receiving box is told to press Trade through DanNet or
-EQBC. When finished it restores the borrowed gem and unpauses RGMercs.
+The caster memorises the summon spells into the borrowed gem if needed,
+casts until it carries enough for everyone, then walks to and trades each
+ticked member in turn. The receiving box is told to press Trade through
+DanNet or EQBC. When finished it restores the borrowed gem and unpauses
+RGMercs.
+
+### Pause
+
+Pause holds the job at the next safe point: before the next cast or the
+next trade. A spell already being cast and a trade already open always
+finish first. RGMercs stays paused while you are paused. Press Resume to
+carry on exactly where it stopped. Time spent paused does not count against
+the summon time limit.
+
+### Combat Hold
+
+You cannot hand anything out while being attacked, and a summon spell
+would only be interrupted. With Combat Hold on (the default), whenever you
+are in combat the job holds:
+
+1. An open trade is cancelled and the items come back to your bags.
+2. RGMercs is unpaused so it can fight and heal.
+3. When the fight has been over for the settle time (5 seconds), RGMercs is
+   paused again and the job carries on.
+
+If you pressed Pause during the fight, the job stays paused afterwards with
+RGMercs paused.
+
+### Busy members
+
+A member who is fighting will not open a trade window. Before each trade
+Provisions asks the member through DanNet whether it is in combat. A member
+who is in combat, or whose trade does not open or is not accepted, goes to
+the back of the line and is tried again after 10 seconds. After 3 tries
+that member is given up on, shown in red as "busy, gave up" and listed in
+chat. Press Hand Out again later to serve them.
 
 ## Commands
 
 | Command | Action |
 |---|---|
-| `/cfood` | Toggle the window |
-| `/cfood go` | Hand out with current settings |
-| `/cfood stop` | Stop a running hand out |
-| `/cfood all` | Tick every eligible member |
-| `/cfood food N` | Set food per member |
-| `/cfood drink N` | Set drink per member |
-| `/cfood quit` | Save and end |
+| `/prov` | Toggle the window |
+| `/prov go` | Hand out with current settings |
+| `/prov pause` | Hold at the next safe point |
+| `/prov resume` | Carry on after a pause |
+| `/prov stop` | Stop a running hand out |
+| `/prov all` | Tick every eligible member |
+| `/prov food N` | Set food per member |
+| `/prov drink N` | Set drink per member |
+| `/prov quit` | Save and end |
+| `/prov help` | List the commands |
 
-`/cfood go` can be sent from another box: `/dex clericname /cfood go`.
+`/prov go` can be sent from another box: `/dex castername /prov go`.
 
 ## Spells used
 
-Detected from your spellbook, best first:
+Detected from your spellbook, best first. Levels are from the
+[Allakhazam spell database](https://everquest.allakhazam.com/db/spells?type=mag&level=1&opt=And+Higher).
 
-| Type | Spells |
-|---|---|
-| Food | Abundant Food, Summon Food (cleric 8) |
-| Drink | Abundant Drink, Summon Drink (cleric 3) |
+| Spell | Makes | Class levels |
+|---|---|---|
+| Cornucopia | Food, a stack per cast | Magician 21 |
+| Abundant Food | Food, several per cast | Cleric 33 |
+| Summon Food | Food | Cleric 8, Druid 11, Shaman 6, Magician 1, Beastlord 29 |
+| Everfount | Drink, a stack per cast | Magician 22 |
+| Abundant Drink | Drink, several per cast | Cleric 28 |
+| Summon Drink | Drink | Cleric 3, Druid 10, Shaman 2, Magician 1, Beastlord 17 |
 
-Use the override boxes in Options for any other spell name. The item each
-spell creates is learned from the cursor after the first cast.
+Other classes see a warning and can type a server's own spell name in the
+override boxes in Options. The item each spell creates is learned from the
+cursor after the first cast.
 
 ## Options
 
@@ -100,20 +165,27 @@ spell creates is learned from the cursor after the first cast.
 |---|---|---|
 | Receiver accepts via | DanNet | How the other box presses Trade. Manual means you or another script accepts. |
 | Top up only | Off | Ask each box its current count with DanNet and give only the shortfall. |
-| Keep my existing stock | On | Never hand out food already in the cleric's bags. |
+| Keep my existing stock | On | Never hand out food already in your bags. |
 | Pause RGMercs | On | `/rgl pause` during the job, only if RGMercs is running. |
 | Walk with MQ2Nav | On | Walk into range when a member is too far. |
 | Cast with MQ2Cast | On | Plugin handles fizzles and interrupts. |
-| Max tries per cast | 5 | MQ2Cast `-maxtries` for one `/casting` call. Fizzles past this are fine; the script casts again. |
-| Summon time limit | 20 min | Summoning keeps going through any number of fizzles until the count is reached. This is only a safety net. 0 = no limit. |
 | Meditate when out of mana | On | Sit and wait instead of failing a cast. |
 | Restore borrowed gem | On | Put the original spell back afterwards. |
+| Combat Hold | On | Hold the job while you are in combat. |
+| Hand back to RGMercs during combat | On | Unpause RGMercs during the fight, pause it again afterwards. |
+| Combat settle | 5 s | Quiet time after a fight before carrying on (0 to 60). |
+| Busy tries | 3 | Attempts per busy member before giving up (1 to 10). |
+| Busy retry | 10 s | Wait before trying a busy member again (2 to 120). |
 | Spell gem | 8 | Gem used when a summon spell is not memorised. |
+| Max tries per cast | 5 | MQ2Cast `-maxtries` for one `/casting` call. Fizzles past this are fine; the script casts again. |
+| Summon time limit | 20 min | Summoning keeps going through any number of fizzles until the count is reached. This is only a safety net, and time held does not count. 0 = no limit. |
 | Trade range | 15 | Units. EQ allows about 20. |
 | Accept timeout | 12 s | Trade is cancelled if not accepted in time. |
+| Walk timeout | 30 s | Longest walk to one member. |
+| Meditate timeout | 120 s | Longest wait for mana per cast. |
 
 Settings save per server and character to
-`<MacroQuest>/config/clericfood_<server>_<name>.lua`.
+`<MacroQuest>/config/provisions_<server>_<name>.lua`.
 
 ## Troubleshooting
 
@@ -122,13 +194,19 @@ Turn on Debug trace in Options. Every command sent is echoed in chat.
 | Symptom | Likely cause |
 |---|---|
 | Partial counts lift the whole stack | QuantityWnd control names differ on your client. Check `QTYW_slider` and `QTYW_Accept_Button` with `/windows`. |
-| Item stays on cursor at the target | Out of range or line of sight. Lower Trade range or enable MQ2Nav. |
+| Item stays on cursor at the target | Out of range or line of sight, or the member is fighting. It will be tried again. |
 | Trade times out | Receiver is not on DanNet under that name, or a different accept method is needed. |
+| A member always shows "busy, gave up" | DanNet reports them in combat, or their client never accepts. Check `/dquery name -q Me.CombatState`. |
+| Job sits on "Combat hold" | You are still in combat or have mobs on your extended target window. |
 | Top up gives full amount | The box did not answer the DanNet query in 2 seconds, so the full count is used. |
 | Summoning is slow and fizzles a lot | Low Conjuration skill. It will still finish; each fizzle also gives a chance to raise the skill. Watch the progress line. |
 | Summoning stops with a reason in red | MQ2Cast reported something retries cannot fix, such as stunned or missing component. |
 | "No free bag slot" | Bags full with no partial stack to grow. |
 
+## License
+
+MIT. See LICENSE. Use, change and share it freely; keep the copyright notice.
+
 <!--
-  END OF FILE : clericfood/README.md
+  END OF FILE : provisions/README.md
 -->

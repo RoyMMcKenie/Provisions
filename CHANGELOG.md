@@ -1,6 +1,6 @@
 <!--
-  FILE    : clericfood/CHANGELOG.md
-  PACKAGE : ClericFood Lua (MacroQuest / EverQuest)
+  FILE    : provisions/CHANGELOG.md
+  PACKAGE : Provisions Lua (MacroQuest / EverQuest)
   WHAT    : Version history of the package.
   WHY     : Explains when and why each behaviour was added.
   WHERE   : Beside init.lua.
@@ -10,6 +10,65 @@
 -->
 
 # Changelog
+
+## 2.0.0 (2026-11-24)
+
+Renamed from ClericFood to Provisions, because every class that summons
+food and drink can use it.
+
+Breaking changes
+
+- Folder is now `provisions`. Run with `/lua run provisions`.
+- Slash command is now `/prov` (was `/cfood`).
+- Settings file is now `provisions_<server>_<name>.lua` in the MacroQuest
+  config folder. An existing `clericfood_<server>_<name>.lua` is imported
+  automatically the first time.
+- The GitHub repository was renamed from ClericFood to Provisions. GitHub
+  redirects the old address.
+
+Consolidation from nine Lua files to five
+
+- `core.lua` = utils + config + group, plus the shared job flags.
+- `delivery.lua` = inventory + trade.
+- `casting.lua` = spells.
+- `init.lua` = init + actions.
+- `ui.lua` stays.
+
+New
+
+- Pause / Resume button and `/prov pause`, `/prov resume`. The job holds at
+  the next safe point (before a cast or a trade). A cast in the air or an
+  open trade always finishes first. RGMercs stays paused while paused, and
+  held time does not count against the summon time limit.
+- Combat Hold (on by default). When the caster is in combat (Me.CombatState
+  is COMBAT, or Me.XTHaterCount above 0), the job holds. An open trade is
+  cancelled and the items come back. RGMercs is handed back (`/rgl unpause`)
+  so it can fight and heal, then paused again once the fight has been over
+  for the settle time (default 5 seconds).
+- Busy members. A member who DanNet reports in combat, or whose trade does
+  not open or is not accepted, moves to the back of the line and is tried
+  again after 10 seconds, up to 3 tries. Members given up on are listed in
+  chat and shown in red as "busy, gave up".
+- All summoning classes: Cleric, Druid, Shaman, Magician and Beastlord.
+  Magician Cornucopia and Everfount added to the spell lists. Other classes
+  get a warning and can use the override boxes.
+- New options: Combat Hold, Hand back to RGMercs during combat, Combat
+  settle (s), Busy tries, Busy retry (s), Walk timeout (s).
+
+Fixes
+
+- DanNet queries wait on the Received timestamp, so a Top up count can no
+  longer read the answer from a previous query.
+- `/prov quit` during a job now stops the job cleanly first.
+
+## 1.3.2 (2026-10-04)
+
+- Prepared for GitHub at https://github.com/RoyMMcKenie/ClericFood.
+- Added LICENSE (MIT).
+- Added .gitignore (Python cache, zips, settings files, editor clutter).
+- README: install by git clone or by downloading the zip from GitHub, and a
+  License section.
+- No code change.
 
 ## 1.3.1 (2026-10-04)
 
@@ -66,5 +125,5 @@
   MQ2Nav walking, RGMercs pause, gem restore.
 
 <!--
-  END OF FILE : clericfood/CHANGELOG.md
+  END OF FILE : provisions/CHANGELOG.md
 -->

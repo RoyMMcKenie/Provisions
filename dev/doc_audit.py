@@ -1,25 +1,28 @@
 """
 =============================================================================
-  FILE        : clericfood/dev/doc_audit.py
-  PACKAGE     : ClericFood Lua  (MacroQuest / EverQuest)
-  VERSION     : 1.3.1
-  CHANGES     : 1.3.1  First version.
+  FILE        : provisions/dev/doc_audit.py
+  PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
+  VERSION     : 2.0.0
+  CHANGES     : 2.0.0  Renamed for the Provisions package. The header check
+                       now also requires a READING GUIDE section.
+                1.3.2  No change in this file.
+                1.3.1  First version.
 
   WHAT  : Checks that every Lua file in the package meets the documentation
           standard described in ARCHITECTURE.md, and prints anything that
           does not.
 
   WHY   : The project rule is that all code is fully documented. Reading
-          3,500 lines by eye after every edit is not realistic, so this script
+          thousands of lines by eye after every edit is not realistic, so this script
           does the checking. Run it after any change and fix whatever it
           reports before calling the change finished.
 
-  WHERE : Lives in clericfood/dev/. Not used by the game; MacroQuest ignores
+  WHERE : Lives in provisions/dev/. Not used by the game; MacroQuest ignores
           Python files. Run it from a normal command prompt on your PC.
 
   HOW   : For each .lua file it checks, in order:
             1. Header block has FILE, PACKAGE, VERSION, CHANGES, WHAT, WHY,
-               WHERE, HOW and WHEN.
+               WHERE, HOW, WHEN and READING GUIDE.
             2. Footer block has END OF FILE.
             3. VERSION matches the newest entry in CHANGELOG.md, and the
                file's CHANGES list has an entry for that version.
@@ -32,7 +35,7 @@
 
   WHEN  : After every edit to any .lua file, before packaging a new zip.
 
-  USAGE : python dev/doc_audit.py          (run from the clericfood folder)
+  USAGE : python dev/doc_audit.py          (run from the provisions folder)
 =============================================================================
 """
 
@@ -46,7 +49,8 @@ import sys     # exit code
 PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Labels every file header must contain.
-HEADER_TAGS = ['FILE', 'PACKAGE', 'VERSION', 'CHANGES', 'WHAT', 'WHY', 'WHERE', 'HOW', 'WHEN']
+HEADER_TAGS = ['FILE', 'PACKAGE', 'VERSION', 'CHANGES', 'WHAT', 'WHY', 'WHERE', 'HOW', 'WHEN',
+               'READING GUIDE']
 
 # Labels every function doc block must contain.
 FUNC_TAGS = ['WHAT', 'WHY', 'WHERE', 'HOW', 'WHEN']
@@ -189,7 +193,7 @@ if __name__ == '__main__':
     main()   # only runs when executed directly, not when imported
 
 # =============================================================================
-#   END OF FILE : clericfood/dev/doc_audit.py
+#   END OF FILE : provisions/dev/doc_audit.py
 #
 #   HOW TO EDIT SAFELY
 #     - To require a new header label, add it to HEADER_TAGS.

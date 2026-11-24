@@ -1,17 +1,17 @@
 <!--
-  FILE    : clericfood/ARCHITECTURE.md
-  PACKAGE : ClericFood Lua (MacroQuest / EverQuest)
-  VERSION : 1.3.1
+  FILE    : provisions/ARCHITECTURE.md
+  PACKAGE : Provisions Lua (MacroQuest / EverQuest)
+  VERSION : 2.0.0
   WHAT    : Maintainer's map of the package: what each file does, how a job
-            flows through them, where every setting is used, and recipes
-            for common changes.
+            flows through them, how Stop, Pause and Combat Hold work, where
+            every setting is used, and recipes for common changes.
   WHY     : So the code can be picked up years later without rediscovering
             how the pieces fit.
-  WHERE   : Beside init.lua in <MacroQuest>/lua/clericfood/.
+  WHERE   : Beside init.lua in <MacroQuest>/lua/provisions/.
   WHEN    : Read before changing any code.
 -->
 
-# ClericFood architecture
+# Provisions architecture
 
 ## Start here
 
@@ -19,157 +19,221 @@ If you only read one section, read this:
 
 1. `init.lua` starts everything and runs a loop every 100 ms.
 2. The window (`ui.lua`) never waits. Pressing Hand Out only sets
-   `actions.requested = true`.
-3. On the next loop pass, `actions.tick` sees the flag and runs the whole
-   job in `actions.run`. Waiting is allowed there.
-4. `actions.run` calls `spells` to summon, then `trade` to hand out.
-5. `cleanup` in `actions.lua` always runs afterwards and puts everything
-   back.
+   `core.job.requested = true`.
+3. On the next loop pass, `tick` in `init.lua` sees the flag and runs the
+   whole job in `run`. Waiting is allowed there.
+4. `run` calls `casting` to summon, then `serveMembers`, which calls
+   `delivery` to trade.
+5. Before every cast and every trade, `core.checkpoint()` runs. That is
+   where Pause and Combat Hold wait.
+6. `cleanup` in `init.lua` always runs afterwards and puts everything back.
 
 ## Module map
 
 | File | One line job | Requires |
 |---|---|---|
-| `init.lua` | Startup, `/cfood` command, main loop | all modules |
-| `ui.lua` | ImGui window, never waits | utils, config, inventory, spells, group, actions |
-| `actions.lua` | Job runner and cleanup | utils, config, inventory, spells, group, trade |
-| `spells.lua` | Detect, memorise, cast, summon loop, MQ2Cast | utils, config, inventory |
-| `trade.lua` | Walk, trade, remote accept, DanNet count query | utils, config, inventory |
-| `group.lua` | Roster rows and ticks | config |
-| `inventory.lua` | Count, stash, exact quantity pickup | utils |
-| `config.lua` | Defaults, load, save | utils |
-| `utils.lua` | Echo, cmd, abortable delay, clamp | nothing |
+| `init.lua` | Startup, `/prov`, main loop, job runner, checkpoint, trade queue, cleanup | all files |
+| `ui.lua` | ImGui window, never waits | core, delivery, casting |
+| `casting.lua` | Detect, memorise, cast, summon loop, MQ2Cast | core, delivery |
+| `delivery.lua` | Bag counts, cursor, pickup, walk, trade, remote accept, DanNet queries | core |
+| `core.lua` | Echo, cmd, abortable delay, settings, roster, job flags, combat check | nothing |
 | `dev/doc_audit.py` | Checks the documentation standard (PC only) | Python |
 | `dev/smoke_test.py` | Runs the code against a fake MacroQuest (PC only) | Python, lupa |
+| `LICENSE` | MIT license terms | |
+| `.gitignore` | Files git never uploads | |
 
-Requires only point downward in this table. Keep it that way. A module that
+Requires only point downward in this table. Keep it that way. A file that
 requires something above it creates a loop and Lua will fail to load.
+
+### Where the 1.3.2 files went
+
+| ClericFood 1.3.2 | Provisions 2.0.0 |
+|---|---|
+| utils.lua, config.lua, group.lua | core.lua parts 1, 2 and 3 |
+| (job flags in actions.lua) | core.lua part 4 |
+| inventory.lua, trade.lua | delivery.lua parts 1 and 3 (part 2 is new DanNet code) |
+| spells.lua | casting.lua |
+| init.lua, actions.lua | init.lua |
+| ui.lua | ui.lua |
 
 ## Flow of one hand out
 
 ```
-Hand Out button / /cfood go
-  actions.request()                     sets requested = true
-main loop
-  actions.tick()
-    actions.run(state)
-      spells.detect()                   best food and drink spell
-      group.refresh(true)               live roster
-      group.selectedRows()              ticked, in zone, not merc
+Hand Out button / /prov go
+  core.request()                        sets job.requested = true
+main loop (init.lua)
+  tick()
+    run()
+      casting.detect()                  best food and drink spell
+      core.refreshRoster(true)          live roster
+      core.selectedRows()               ticked, in zone, not merc
       /rgl pause                        if RGMercs is running
-      spells.beginJob()                 fizzle events on, load MQ2Cast if needed
+      casting.beginJob()                fizzle events on, load MQ2Cast if needed
       planNeeds()                       per member counts, Top up queries
-      spells.summonUntil('food', n)     loop until n carried, fizzles ignored
-        spells.castOnce()
+      casting.summonUntil('food', n)    loop until n carried, fizzles ignored
+        core.checkpoint()               Pause and Combat Hold wait here
+        casting.castOnce()
           waitForMana()
           castWithMQ2Cast()             /casting "x|gem8" -maxtries|5
             or castWithPlainCast()      /memspell, /cast
           learn item name, /autoinventory
-      spells.summonUntil('drink', n)
-      for each member:
-        trade.giveItems()
-          trade.moveInRange()           /nav id
+      casting.summonUntil('drink', n)
+      serveMembers(plan)                retry queue
+        core.checkpoint()
+        delivery.peerInCombat()         DanNet Me.CombatState
+        delivery.giveItems()
+          delivery.moveInRange()        /nav id
           buildPlan()                   split into stacks of 20
           runOneTrade()                 up to 8 stacks
-            inventory.pickUp()          shift, ctrl or quantity slider
+            delivery.pickUp()           shift, ctrl or quantity slider
             /click left target
-            press Trade, remoteAccept() /dex or /bct
+            press Trade, waitForAccept()  /dex or /bct, cancels on combat
             verify by recounting bags
     cleanup()
-      trade.cancel()
-      inventory.clearCursor()
+      delivery.cancel()
+      delivery.clearCursor()
       /nav stop
-      spells.restore()                  put gem 8 back
-      spells.endJob()                   fizzle events off, unload MQ2Cast if we loaded it
-      /rgl unpause                      only if we paused it
+      casting.restore()                 put gem 8 back
+      casting.endJob()                  fizzle events off, unload MQ2Cast if we loaded it
+      /rgl unpause                      only if we paused it and it is not handed back
 ```
 
 ## How Stop works
 
-1. Stop sets `actions.stopRequested = true`.
-2. `utils.delay` checks that flag through `utils.bindAbortFlag`, so every
-   wait in every module ends early.
-3. Loops check `utils.aborted()` between steps and exit.
+1. Stop sets `core.job.stopRequested = true` and clears Pause.
+2. `core.delay` checks that flag, so every wait in every file ends early.
+3. Loops check `core.aborted()` between steps and exit. The checkpoint
+   loop ends too.
 4. When an MQ2Cast cast is running, `/interrupt` is sent so the plugin
    stops its own retries.
 5. `cleanup` clears the flag first, so its own waits (gem restore, trade
    cancel) run to completion.
+
+## How Pause and Combat Hold work
+
+Both are holds at a checkpoint, a safe point before a cast or a trade.
+`core.checkpoint()` calls the function `init.lua` installed with
+`core.bindCheckpoint`. It loops every 250 ms while a hold applies and
+returns two values: carry on (false after Stop) and the milliseconds held.
+The summon loop adds the held time to its start time, so holds never count
+against the summon time limit.
+
+| Hold | Starts when | RGMercs | Ends when |
+|---|---|---|---|
+| Paused | Pause pressed (`core.job.paused`) | Stays paused | Resume pressed |
+| Combat hold | Combat Hold on and `core.inCombat()` | `/rgl unpause` once (if Hand back is on and the job paused it) | Out of combat for `combatSettleSec`; then `/rgl pause` again |
+
+Combat hold wins over Paused. If both apply, the job stays Paused after the
+fight with RGMercs paused again.
+
+`core.inCombat()` is true when `Me.CombatState` is `COMBAT` or
+`Me.XTHaterCount` is above 0. Both are on the MacroQuest
+[character data type page](https://docs.macroquest.org/reference/data-types/datatype-character/).
+
+Long waits end early when a hold is wanted (`core.holdWanted()`), so the
+hold starts promptly:
+
+| Wait | What happens |
+|---|---|
+| Meditating for mana | Ends; the cast counts as retryable. |
+| MQ2Cast working | The spell in the air finishes. If MQ2Cast is about to retry, `/interrupt` cancels the retry; counts as retryable. |
+| Waiting for a trade accept (combat only) | Trade cancelled, items come back, reason `combat`; no try is used. |
+
+## How busy members work
+
+`serveMembers` in `init.lua` keeps a queue of `{ m, tries, notBefore }`.
+Each pass runs the checkpoint, takes the first entry whose `notBefore` has
+passed, and tries it.
+
+| Trade reason | From | What happens |
+|---|---|---|
+| `ok` | delivery.giveItems | Recorded and reported. |
+| `combat` | delivery (caster attacked) | Back of the queue, no try used. The next checkpoint holds. |
+| `busy` | DanNet says fighting, or trade not opened or not accepted | Try +1, back of the queue for `busyRetrySec`. |
+| `range` | Could not walk into range | Same as busy. |
+| `failed` | Caster side problem (target, pickup) | Same as busy. |
+
+After `busyTries` tries the member is given up on, noted as "busy, gave
+up" and listed in chat at the end.
+
+DanNet queries use `/dquery peer -q "query"`, then wait on
+`DanNet(peer).Q(query).Received`. The MQ2Dan
+[README](https://github.com/dannuic/MQ2Dan/blob/master/README.md) documents
+that a new `/dquery` clears the stored answer, so a stale reply is never
+read.
 
 ## How fizzles are handled
 
 The summon loop's goal is an item count, not a cast count. It casts until
 the bags hold the target number, however many fizzles that takes.
 
-Every failed cast is sorted into one of three kinds:
-
 | Kind | Examples | What happens |
 |---|---|---|
-| Retryable | Fizzle, interrupt, gem not ready (`RETRYABLE_RESULTS`, or a fizzle seen in chat) | Cast again. Never counts toward giving up. |
+| Retryable | Fizzle, interrupt, gem not ready (`RETRYABLE_RESULTS`, or a fizzle seen in chat), a hold | Cast again. Never counts toward giving up. |
 | Fatal | Stunned, missing component (`FATAL_RESULTS`) | Stop summoning at once, reason in red. |
 | Other | Mana wait timed out, cursor stuck | 3 in a row stops summoning (`OTHER_FAILURE_LIMIT`). |
 
 The only limit on fizzles is the summon time limit (`summonTimeoutMin`,
-default 20 minutes, 0 = none).
-
-Fizzles and interrupts are counted from the game's chat messages using
-`mq.event` (patterns in `EVENTS` in `spells.lua`). The events are registered
-in `spells.beginJob`, processed with `mq.doevents()` after every cast, and
-removed in `spells.endJob`. The counts appear live in the window.
+default 20 minutes, 0 = none). Fizzles and interrupts are counted from chat
+with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 
 ## Where each setting is used
 
 | Setting | Read in |
 |---|---|
-| `foodCount`, `drinkCount` | actions.planNeeds, ui.drawCounts, ui.resultText |
-| `foodSpell`, `drinkSpell` | spells.detect |
-| `foodItem`, `drinkItem` | actions, spells.castOnce (learned here), ui |
-| `gem`, `restoreGem` | spells.memorize, castWithMQ2Cast, spells.restore |
-| `useMQ2Cast`, `castMaxTries` | spells.beginJob, usingMQ2Cast, castWithMQ2Cast |
-| `summonTimeoutMin` | spells.summonUntil |
-| `medForMana`, `medTimeoutSec` | spells.waitForMana |
-| `preserveOwnStock` | actions.planNeeds |
-| `topUp` | actions.planNeeds |
-| `acceptMethod` | trade.remoteAccept |
-| `tradeTimeoutSec` | trade.runOneTrade |
-| `tradeRange`, `useNav`, `navTimeoutSec` | trade.moveInRange, ui.drawRoster |
-| `pauseRGMercs` | actions.run |
-| `selected` | group.isSelected, group.setSelected |
-| `debug` | utils.debug through config.load |
+| `foodCount`, `drinkCount` | init.planNeeds, ui.drawCounts, ui.resultText |
+| `foodSpell`, `drinkSpell` | casting.detect |
+| `foodItem`, `drinkItem` | init, casting.castOnce (learned here), ui |
+| `gem`, `restoreGem` | casting.memorize, castWithMQ2Cast, casting.restore |
+| `useMQ2Cast`, `castMaxTries` | casting.beginJob, usingMQ2Cast, castWithMQ2Cast |
+| `summonTimeoutMin` | casting.summonUntil |
+| `medForMana`, `medTimeoutSec` | casting.waitForMana |
+| `preserveOwnStock`, `topUp` | init.planNeeds |
+| `acceptMethod` | delivery.remoteAccept |
+| `tradeTimeoutSec` | delivery.waitForAccept |
+| `tradeRange`, `useNav`, `navTimeoutSec` | delivery.moveInRange, ui.drawRoster |
+| `pauseRGMercs` | init.run |
+| `combatHold` | core.holdWanted, init.checkpoint, delivery.waitForAccept |
+| `combatHandBack`, `combatSettleSec` | init.checkpoint |
+| `busyTries`, `busyRetrySec` | init.serveMembers |
+| `selected` | core.isSelected, core.setSelected |
+| `debug` | core.debug |
 
 ## Common changes
 
 | I want to | Edit |
 |---|---|
-| Add a new spell name | `FOOD_SPELLS` or `DRINK_SPELLS` in `spells.lua`, best first |
-| Add a new option | `config.DEFAULTS`, then a control in `ui.drawOptions` |
+| Add a new spell name | `FOOD_SPELLS` or `DRINK_SPELLS` in `casting.lua`, best first |
+| Add a new option | `core.DEFAULTS` (plus a clamp in `core.load` for numbers), then a control in `ui.drawOptions` |
 | Add a slash command | `onCommand` and `printHelp` in `init.lua`, README table |
-| Change the RGMercs pause commands | `actions.run` and `cleanup` |
-| Add an accept method | `remoteAccept` in `trade.lua`, radio button in `ui.drawOptions` |
-| Fix partial stack pickup | `inventory.pickUp`, check names with `/windows` |
-| Treat another cast result as hopeless | `FATAL_RESULTS` in `spells.lua` |
-| Treat another cast result as "just cast again" | `RETRYABLE_RESULTS` in `spells.lua` |
-| Fizzle message worded differently on a server | `EVENTS` in `spells.lua` |
-| Per member counts | `group.lua` selected storage, new column in `ui.drawRoster`, `planNeeds` |
+| Change the RGMercs commands | `run`, `checkpoint` and `cleanup` in `init.lua` |
+| Change what counts as combat | `core.inCombat` |
+| Add a hold reason | `checkpoint` in `init.lua`, and `core.holdWanted` if long waits should end for it |
+| Add an accept method | `remoteAccept` in `delivery.lua`, radio button in `ui.drawOptions` |
+| Fix partial stack pickup | `delivery.pickUp`, check names with `/windows` |
+| Treat another cast result as hopeless | `FATAL_RESULTS` in `casting.lua` |
+| Treat another cast result as "just cast again" | `RETRYABLE_RESULTS` in `casting.lua` |
+| Fizzle message worded differently on a server | `EVENTS` in `casting.lua` |
 
 ## Documentation standard
 
 Every Lua file follows the same layout so any file reads the same way:
 
-1. **Header block** at the top: FILE, PACKAGE, VERSION, CHANGES (every
-   package version, "No change in this file" where nothing changed), then
-   WHAT, WHY, WHERE, HOW and WHEN for the file, then a READING GUIDE that
-   explains game and MacroQuest terms used in the file.
+1. **Header block** at the top: FILE, PACKAGE, VERSION, CHANGES (newest
+   first), then WHAT, WHY, WHERE, HOW and WHEN for the file, then a READING
+   GUIDE that explains game and MacroQuest terms used in the file.
 2. **Module variables** each have a short block: WHAT, WHY, WHERE, HOW, WHEN.
-3. **Every function** has a doc block directly above it with WHAT (what it
-   does and returns), WHY (the reason it exists), WHERE (who calls it),
-   HOW (the steps) and WHEN (at what point it runs).
+3. **Every function** has a doc block above it with WHAT (what it does and
+   returns), WHY (the reason it exists), WHERE (who calls it), HOW (the
+   steps) and WHEN (at what point it runs). Small helpers that share a
+   block with a sibling carry a one line comment directly above.
 4. **Every line of code** has a comment at the end of the line or within the
    three lines above it.
 5. **Footer block** at the bottom: END OF FILE, a summary of the public
    functions, dependencies, and HOW TO EDIT SAFELY notes.
 
 Markdown files carry a short HTML comment header and footer with the same
-labels.
+labels. `dev/doc_audit.py` checks all of the Lua rules.
 
 ## Making a change: checklist
 
@@ -179,11 +243,13 @@ labels.
 3. Add an entry at the top of CHANGELOG.md with the new version number.
 4. In every .lua file: set VERSION to the new number and add a CHANGES line
    (describe the change, or "No change in this file").
-5. Update this file if the flow, a setting, or a module's job changed, and
+5. Update this file if the flow, a setting, or a file's job changed, and
    README.md if anything the operator sees changed.
 6. Run `python dev/doc_audit.py` and fix anything it reports.
 7. Run `python dev/smoke_test.py` and make sure all scenarios pass.
 8. Test in game with Debug trace on.
+9. Commit with a message that starts with the version, for example
+   `2.0.1: fix busy retry timing`, and push to GitHub.
 
 ## Glossary
 
@@ -194,11 +260,15 @@ labels.
 | Cursor | The item held on the mouse pointer |
 | Yield | Hand control back to MacroQuest briefly with `mq.delay` |
 | Job | One Hand Out, start to cleanup |
+| Checkpoint | A safe point before a cast or trade where a hold may start |
+| Hold | Waiting at a checkpoint: Paused or Combat hold |
+| Hand back | Unpausing RGMercs during a Combat hold so it can fight |
+| Busy | A member who could not be traded right now |
 | Drop | One stack placed into one trade slot |
 | Plan | The list of drops for one member |
-| Reserve | Stock the cleric keeps and never trades away |
+| Reserve | Stock the caster keeps and never trades away |
 | Peer | A box on DanNet, addressed by lower case name |
 
 <!--
-  END OF FILE : clericfood/ARCHITECTURE.md
+  END OF FILE : provisions/ARCHITECTURE.md
 -->

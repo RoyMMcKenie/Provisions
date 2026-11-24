@@ -1,95 +1,90 @@
 --[[==========================================================================
-  FILE        : clericfood/ui.lua
-  PACKAGE     : ClericFood Lua  (MacroQuest / EverQuest)
-  VERSION     : 1.3.1
-  CHANGES     : 1.0.0  First release.
-                1.1.0  MQ2Cast toggle, max tries box, last cast result line.
-                1.2.0  Full inline documentation pass. No behaviour change.
-                1.3.0  Live summon progress line with fizzle and interrupt
-                       counts. Summon time limit box.
-                1.3.1  Documentation audit: every code line now carries
-                       its own comment or one directly above it.
+  FILE        : provisions/ui.lua
+  PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
+  VERSION     : 2.0.0
+  CHANGES     : 2.0.0  Renamed from ClericFood ui.lua; window title is now
+                       Provisions. Adds a Pause / Resume button next to Stop,
+                       shows the current hold (Paused or Combat hold) on the
+                       status line, shows a warning for classes without
+                       summon spells, and adds Options for Combat Hold,
+                       handing RGMercs back during a fight, the settle time,
+                       and the busy member tries and retry time.
+                1.0.0 to 1.3.2  Released as ClericFood ui.lua. Full history
+                       in CHANGELOG.md.
 
-  WHAT  : The ImGui window: a checkbox list of the group, food and drink count
-          selectors, Hand Out and Stop buttons, live status, last results, and
-          a collapsible Options section.
+  WHAT  : The ImGui window: food and drink counts, the group checkbox list,
+          Hand Out / Pause / Stop, live status and progress, and Options.
 
-  WHY   : This is the feature the operator asked for. Ticking who gets fed and
-          choosing how many is a two second job in a window, and the window
-          shows at a glance whether each box was actually served.
+  WHY   : The operator picks who gets food and drink and how much without
+          typing commands, and can see at a glance what the job is doing.
 
-  WHERE : Registered by init.lua through mq.imgui.init, which calls ui.render
-          once per frame.
+  WHERE : Required by init.lua, which registers ui.render with
+          mq.imgui.init. Reads and writes core.settings and core.job; reads
+          casting and delivery for display only.
 
-  HOW   : Draws only; never waits. Buttons call actions.request and
-          actions.stop, which flip flags that init.lua's main loop acts on.
-          Any changed setting marks the settings dirty, and ui.flushSave writes
-          the file at most once a second so a slider drag is not hundreds of
-          disk writes.
+  HOW   : Immediate mode GUI: ui.render redraws everything every frame from
+          the current state. Controls write straight into core.settings and
+          mark them dirty; a debounced save writes the file at most once a
+          second. Buttons only flip flags in core.job; the job itself runs
+          in init.lua's main loop.
 
   WHEN  : Every frame while the window is open.
 
   READING GUIDE (for future you)
-    - ImGui is "immediate mode": the whole window is redrawn from scratch
-      every frame. There are no stored widgets. A button press is detected by
-      the Button call returning true on the frame it was clicked.
-    - Every ImGui.BeginX must be matched by its EndX, even when nothing is
-      drawn in between. A missing End crashes the window.
-    - Labels after ## are hidden IDs. "##give" draws no text but gives the
-      checkbox a unique ID; PushID(row.name) makes it unique per row.
-    - Window layout, top to bottom:
-        drawCounts      Food each, Drink each, quick buttons
-        drawRoster      Select all / Clear, the checkbox table
-        drawRunControls Hand Out, Stop, status, spells, stock
-        drawOptions     collapsible settings
+    - Nothing in this file may wait (no mq.delay). ImGui callbacks that wait
+      freeze the client.
+    - BeginDisabled / EndDisabled must always come in pairs.
+    - PushID / PopID make the "##give" checkbox label unique per row.
+    - Most settings are locked while a job runs, including while it is
+      paused, so the plan cannot change underneath the job.
 ==========================================================================]]--
 
-local mq        = require('mq')                     -- gettime for the save debounce
-local ImGui     = require('ImGui')                  -- the window toolkit
-local utils     = require('clericfood.utils')       -- clamp
-local config    = require('clericfood.config')      -- settings to read and edit
-local inventory = require('clericfood.inventory')   -- stock on hand line
-local spells    = require('clericfood.spells')      -- detected spells, last result
-local group     = require('clericfood.group')       -- roster and ticks
-local actions   = require('clericfood.actions')     -- request, stop, status, results
+local mq       = require('mq')                    -- gettime for the save debounce
+local ImGui    = require('ImGui')                 -- the window toolkit
+local core     = require('provisions.core')       -- settings, roster, job flags
+local delivery = require('provisions.delivery')   -- stock on hand line
+local casting  = require('provisions.casting')    -- detected spells, progress
 
 local ui = {}
 
---- Window open flag --------------------------------------------------------------
--- WHAT : Whether the window is shown. Closing it does not stop a running job.
--- WHY  : The operator may want the screen space back mid hand out.
--- WHERE: ui.render and /cfood in init.lua.
--- HOW  : Passed to and returned from ImGui.Begin.
--- WHEN : Toggled by the close button or the slash command.
+--- Window visibility ---------------------------------------------------------------
+-- WHAT : true while the window is shown.
+-- WHY  : /prov toggles it and the title bar X closes it.
+-- WHERE: ui.render and init.lua onCommand.
+-- HOW  : ImGui.Begin returns the new value.
+-- WHEN : Every frame.
 ui.open = true
 
---- Save debounce -------------------------------------------------------------------
--- WHAT : dirty marks unsaved changes, lastSave is the time of the last write.
--- WHY  : Prevents writing the settings file on every frame of a drag.
+--- Save debounce -------------------------------------------------------------------------
+-- WHAT : dirty is true when settings changed since the last save; lastSave
+--        is when that save happened.
+-- WHY  : Typing in a number box changes the value every frame. Writing the
+--        file every frame would be wasteful.
 -- WHERE: markDirty and ui.flushSave.
--- HOW  : Compared against mq.gettime.
+-- HOW  : Plain locals.
 -- WHEN : Every frame.
 local dirty, lastSave = false, 0
 
---- Colours -------------------------------------------------------------------------
--- WHAT : RGBA tuples for status text (red, green, blue, alpha from 0 to 1).
--- WHY  : Green means fine, amber means look, red means act, grey is info.
--- WHERE: Roster and status drawing.
--- HOW  : Arrays of four floats unpacked into TextColored.
--- WHEN : Every frame.
+--- Colours --------------------------------------------------------------------------------
+-- WHAT : RGBA colours used for text.
+-- WHY  : Green good, amber attention, red problem, grey information.
+-- WHERE: Throughout this file.
+-- HOW  : Tables of four numbers from 0 to 1.
+-- WHEN : While drawing.
 local GREEN = { 0.35, 0.85, 0.40, 1.0 }
 local AMBER = { 0.95, 0.80, 0.30, 1.0 }
 local RED   = { 1.00, 0.40, 0.35, 1.0 }
-local GREY  = { 0.65, 0.65, 0.65, 1.0 }  -- informational text and blank results
+local GREY  = { 0.65, 0.65, 0.65, 1.0 }   -- informational text and blank results
 
 --[[--------------------------------------------------------------------------
-  colored(color, fmt, ...)
+  colored(color, fmt, ...) / tooltip(text) / markDirty()
 
-  WHAT  : Draws one line of coloured text.
-  WHY   : Shortens every TextColored call in this file.
-  WHERE : Throughout ui.lua.
-  HOW   : Unpacks the colour and formats the text. No varargs means fmt is
-          drawn as is, which keeps names containing % safe.
+  WHAT  : colored draws one line of coloured text. tooltip shows text when
+          the previous control is hovered. markDirty flags a settings change.
+  WHY   : Shortens every call site in this file.
+  WHERE : Throughout this file.
+  HOW   : colored formats only when arguments are given, so names with a %
+          are safe. tooltip uses IsItemHovered on the last drawn control.
   WHEN  : While drawing.
 ----------------------------------------------------------------------------]]
 local function colored(color, fmt, ...)
@@ -97,29 +92,12 @@ local function colored(color, fmt, ...)
     ImGui.TextColored(color[1], color[2], color[3], color[4], text)
 end
 
---[[--------------------------------------------------------------------------
-  tooltip(text)
-
-  WHAT  : Shows text when the previous control is hovered.
-  WHY   : Puts the explanation of each option next to the option, so nobody
-          needs the README while playing.
-  WHERE : After most controls.
-  HOW   : IsItemHovered refers to the control drawn just before this call.
-  WHEN  : While drawing.
-----------------------------------------------------------------------------]]
+-- Hover help for the control drawn just before this call.
 local function tooltip(text)
     if ImGui.IsItemHovered() then ImGui.SetTooltip(text) end
 end
 
---[[--------------------------------------------------------------------------
-  markDirty()
-
-  WHAT  : Flags that settings changed and need saving.
-  WHY   : See the save debounce note above.
-  WHERE : Every control that edits a setting.
-  HOW   : Sets the local dirty flag.
-  WHEN  : On change.
-----------------------------------------------------------------------------]]
+-- A setting changed; ui.flushSave writes it soon.
 local function markDirty()
     dirty = true
 end
@@ -127,136 +105,115 @@ end
 --[[--------------------------------------------------------------------------
   ui.flushSave(force)
 
-  WHAT  : Writes settings if dirty and a second has passed, or at once when
-          forced.
+  WHAT  : Writes settings when dirty and a second has passed, or at once
+          when forced.
   WHY   : Keeps disk writes rare while still saving promptly.
-  WHERE : End of ui.render, and init.lua on exit with force = true.
-  HOW   : config.save behind a time check.
+  WHERE : End of ui.render; init.lua at shutdown with force = true.
+  HOW   : core.save behind a time check.
   WHEN  : Every frame, and at shutdown.
 ----------------------------------------------------------------------------]]
 function ui.flushSave(force)
-    if not dirty then return end                 -- nothing changed
+    if not dirty then return end                -- nothing changed
     local now = mq.gettime()
-    if force or now - lastSave > 1000 then       -- at most one write per second
-        config.save()
+    if force or now - lastSave > 1000 then      -- at most one write a second
+        core.save()
         dirty, lastSave = false, now
     end
 end
 
 --[[--------------------------------------------------------------------------
-  checkbox(label, key, help)
+  checkbox / intInput / textInput
 
-  WHAT  : Draws a checkbox bound to a boolean setting.
-  WHY   : Removes repetitive read, draw, compare, write code for each option.
-  WHERE : drawOptions.
-  HOW   : ImGui.Checkbox returns the new value; when it differs, store it and
-          mark dirty.
+  WHAT  : Controls bound to one setting each.
+  WHY   : Removes repeated read, draw, compare, write code for every option.
+  WHERE : drawCounts and drawOptions.
+  HOW   : Draw with the current value; when the returned value differs,
+          store it and mark dirty. intInput clamps to lo..hi.
   WHEN  : While drawing.
 ----------------------------------------------------------------------------]]
 local function checkbox(label, key, help)
-    local s = config.settings
-    local value = ImGui.Checkbox(label, s[key] == true)        -- draw, get new state
-    if value ~= s[key] then s[key] = value markDirty() end     -- store on change
+    local s = core.settings
+    local value = ImGui.Checkbox(label, s[key] == true)          -- new state
+    if value ~= s[key] then s[key] = value markDirty() end       -- store on change
     if help then tooltip(help) end
 end
 
---[[--------------------------------------------------------------------------
-  intInput(label, key, lo, hi, step, stepFast, help, width)
-
-  WHAT  : Draws an integer box with plus and minus buttons, bound to a setting.
-  WHY   : Food and drink counts, gem number and timeouts all need the same
-          bounded number input.
-  WHERE : drawCounts and drawOptions.
-  HOW   : ImGui.InputInt (step is the +/- amount, stepFast is with ctrl held),
-          then utils.clamp to the allowed range.
-  WHEN  : While drawing.
-----------------------------------------------------------------------------]]
+-- Bounded integer box with + and - buttons (stepFast with ctrl held).
 local function intInput(label, key, lo, hi, step, stepFast, help, width)
-    local s = config.settings
-    ImGui.SetNextItemWidth(width or 120)                       -- box width in pixels
-    local value = ImGui.InputInt(label, s[key], step or 1, stepFast or 5)
-    value = utils.clamp(value, lo, hi)                         -- keep in range
+    local s = core.settings
+    ImGui.SetNextItemWidth(width or 120)
+    local value = ImGui.InputInt(label, s[key], step or 1, stepFast or 5)   -- draw the box, get the value back
+    value = core.clamp(value, lo, hi)                            -- keep in range
     if value ~= s[key] then s[key] = value markDirty() end
     if help then tooltip(help) end
 end
 
---[[--------------------------------------------------------------------------
-  textInput(label, key, help)
-
-  WHAT  : Draws a text box bound to a string setting.
-  WHY   : Spell overrides and item names may need typing on unusual servers.
-  WHERE : drawOptions.
-  HOW   : ImGui.InputText, store when changed.
-  WHEN  : While drawing.
-----------------------------------------------------------------------------]]
+-- Free text box for spell and item names.
 local function textInput(label, key, help)
-    local s = config.settings
+    local s = core.settings
     ImGui.SetNextItemWidth(220)
-    local value = ImGui.InputText(label, s[key] or '')  -- draw the box, get the current text back
-    if value ~= s[key] then s[key] = value markDirty() end  -- store on change and schedule a save
-    if help then tooltip(help) end  -- hover help
+    local value = ImGui.InputText(label, s[key] or '')   -- draw the box, get the text back
+    if value ~= s[key] then s[key] = value markDirty() end   -- store on change and schedule a save
+    if help then tooltip(help) end   -- hover help
 end
 
 --[[--------------------------------------------------------------------------
   drawCounts()
 
-  WHAT  : The food and drink quantity selectors plus quick set buttons.
-  WHY   : The two numbers the operator changes most often sit at the top.
+  WHAT  : The food and drink quantity boxes plus quick set buttons.
+  WHY   : The two numbers changed most often sit at the top.
   WHERE : ui.render.
-  HOW   : Two bounded intInputs, then 5 / 10 / 20 buttons that set both, and
-          Drink only / Food only buttons that zero the other. Disabled while a
-          job runs so the plan cannot change underneath it.
+  HOW   : Two intInputs (0 to 80), buttons for 5 / 10 / 20 each, and
+          Drink only / Food only. Locked while a job runs.
   WHEN  : Every frame.
 ----------------------------------------------------------------------------]]
 local function drawCounts()
-    local s = config.settings
-    ImGui.BeginDisabled(actions.running)   -- grey out during a job
-
-    intInput('Food each', 'foodCount', 0, 80, 1, 5,
-        'How many food items every ticked member should receive.')
-    ImGui.SameLine()                       -- keep Drink on the same line
-    intInput('Drink each', 'drinkCount', 0, 80, 1, 5,
-        'How many drink items every ticked member should receive.')
-
-    -- Quick set buttons on one row.
-    for _, n in ipairs({ 5, 10, 20 }) do
-        if ImGui.Button(tostring(n) .. ' each') then
-            s.foodCount, s.drinkCount = n, n
-            markDirty()  -- schedule a save
+    local s = core.settings
+    ImGui.BeginDisabled(core.job.running)
+    intInput('Food each', 'foodCount', 0, 80, 1, 5,   -- setting foodCount
+        'How many food items every ticked member should receive.')   -- hover help for Food each
+    ImGui.SameLine()   -- Drink on the same line
+    intInput('Drink each', 'drinkCount', 0, 80, 1, 5,   -- setting drinkCount
+        'How many drink items every ticked member should receive.')   -- hover help for Drink each
+    for _, n in ipairs({ 5, 10, 20 }) do   -- three quick set buttons
+        if ImGui.Button(tostring(n) .. ' each') then   -- true on the frame it is clicked
+            s.foodCount, s.drinkCount = n, n   -- set both counts
+            markDirty()   -- schedule a save
         end
-        tooltip('Set both food and drink to ' .. n .. '.')  -- hover help for each quick button
-        ImGui.SameLine()  -- next button on the same row
+        tooltip('Set both food and drink to ' .. n .. '.')   -- hover help for this button
+        ImGui.SameLine()   -- next button on the same row
     end
-    if ImGui.Button('Drink only') then s.foodCount = 0 markDirty() end  -- zero food, keep drink
-    tooltip('Set food to zero.')  -- hover help
-    ImGui.SameLine()  -- next button on the same row
-    if ImGui.Button('Food only') then s.drinkCount = 0 markDirty() end  -- zero drink, keep food
-    tooltip('Set drink to zero.')  -- hover help
-
-    ImGui.EndDisabled()                    -- must match BeginDisabled above
+    if ImGui.Button('Drink only') then s.foodCount = 0 markDirty() end
+    tooltip('Set food to zero.')
+    ImGui.SameLine()   -- next button on the same row
+    if ImGui.Button('Food only') then s.drinkCount = 0 markDirty() end   -- zero drink, keep food
+    tooltip('Set drink to zero.')   -- hover help
+    ImGui.EndDisabled()   -- pairs with BeginDisabled above
 end
 
 --[[--------------------------------------------------------------------------
   resultText(name)
 
   WHAT  : Builds the Last result cell for one member, with a colour.
-  WHY   : Shows at a glance who was served and who was missed.
+  WHY   : Shows at a glance who was served, who is waiting, who was missed.
   WHERE : drawRoster.
-  HOW   : Compares delivered to requested from actions.results. Green when
-          full or a note applies (kept, already stocked), amber when partly
-          served, red when nothing arrived, blank when not in the last job.
+  HOW   : From core.job.results. Green when full or kept or already
+          stocked, amber when partly served or busy and waiting, red when
+          nothing arrived or given up, blank when not part of the last job.
   WHEN  : Every frame.
 ----------------------------------------------------------------------------]]
 local function resultText(name)
-    local r = actions.results[name]
-    if not r then return GREY, '' end                -- not part of last job
+    local r = core.job.results[name]
+    if not r then return GREY, '' end   -- not part of the last job
     local text = string.format('%d food, %d drink', r.food or 0, r.drink or 0)
     if r.note then text = text .. ' (' .. r.note .. ')' end
-    local s = config.settings
-    local full = (r.food or 0) >= s.foodCount and (r.drink or 0) >= s.drinkCount  -- true when this member got at least the full counts
-    if r.note or full then return GREEN, text end  -- green: full, kept, or already stocked
-    if (r.food or 0) + (r.drink or 0) > 0 then return AMBER, text end  -- amber: something arrived but not everything
-    return RED, text  -- red: nothing arrived
+    local s = core.settings
+    local full = (r.food or 0) >= s.foodCount and (r.drink or 0) >= s.drinkCount   -- true when at least the full counts arrived
+    if r.note == 'busy, gave up' then return RED, text end          -- missed
+    if r.note and r.note:find('^busy') then return AMBER, text end  -- waiting
+    if r.note or full then return GREEN, text end                   -- kept, stocked, full
+    if (r.food or 0) + (r.drink or 0) > 0 then return AMBER, text end
+    return RED, text   -- nothing arrived
 end
 
 --[[--------------------------------------------------------------------------
@@ -265,84 +222,74 @@ end
   WHAT  : The checkbox list of group members.
   WHY   : This is how the operator picks who gets food and drink.
   WHERE : ui.render.
-  HOW   : Refresh the roster (throttled), then a five column table: Give,
-          Name, Class, Distance, Last result. Mercenaries and members out of
-          zone are shown but their boxes are disabled. The cleric's own row
-          means "keep a set for me". Select all and Clear sit above the table.
+  HOW   : Refresh (throttled in core), Select all / Clear, then a five
+          column table: Give, Name, Class, Dist, Last result. Mercenaries
+          and members out of zone are shown but locked. The caster's own
+          row means "keep a set for me".
   WHEN  : Every frame.
 ----------------------------------------------------------------------------]]
 local function drawRoster()
-    group.refresh(false)   -- throttled inside group.lua to twice a second
-
-    -- Bulk tick buttons.
-    ImGui.BeginDisabled(actions.running)
-    if ImGui.Button('Select all') then group.setAll(true) markDirty() end
+    core.refreshRoster(false)   -- at most twice a second
+    ImGui.BeginDisabled(core.job.running)
+    if ImGui.Button('Select all') then core.setAll(true) markDirty() end
     ImGui.SameLine()
-    if ImGui.Button('Clear') then group.setAll(false) markDirty() end  -- untick everyone
-    ImGui.EndDisabled()  -- matches BeginDisabled above the buttons
+    if ImGui.Button('Clear') then core.setAll(false) markDirty() end   -- untick everyone
+    ImGui.EndDisabled()   -- pairs with BeginDisabled above the buttons
 
-    -- Table with borders and alternating row shading.
-    local flags = ImGuiTableFlags.Borders + ImGuiTableFlags.RowBg  -- distinct bits, so + is a safe OR
-    -- BeginTable returns false when the table is clipped; EndTable is then skipped.
-    if not ImGui.BeginTable('##cfroster', 5, flags) then return end
-
-    -- Column headers. Fixed columns use the pixel width given.
+    local flags = ImGuiTableFlags.Borders + ImGuiTableFlags.RowBg   -- distinct bits
+    if not ImGui.BeginTable('##provroster', 5, flags) then return end
     ImGui.TableSetupColumn('Give',        ImGuiTableColumnFlags.WidthFixed, 40)
     ImGui.TableSetupColumn('Name',        ImGuiTableColumnFlags.WidthStretch)
-    ImGui.TableSetupColumn('Class',       ImGuiTableColumnFlags.WidthFixed, 45)
-    ImGui.TableSetupColumn('Dist',        ImGuiTableColumnFlags.WidthFixed, 45)  -- distance column, fixed width
-    ImGui.TableSetupColumn('Last result', ImGuiTableColumnFlags.WidthStretch)  -- last result column takes the remaining width
-    ImGui.TableHeadersRow()  -- draw the header row
+    ImGui.TableSetupColumn('Class',       ImGuiTableColumnFlags.WidthFixed, 45)   -- class column, fixed width
+    ImGui.TableSetupColumn('Dist',        ImGuiTableColumnFlags.WidthFixed, 45)   -- distance column, fixed width
+    ImGui.TableSetupColumn('Last result', ImGuiTableColumnFlags.WidthStretch)   -- result column takes the rest
+    ImGui.TableHeadersRow()   -- draw the header row
 
-    local range = config.settings.tradeRange  -- used to colour the distance figure
-    for _, row in ipairs(group.roster) do  -- one table row per roster entry
-        ImGui.TableNextRow()  -- start a new table row
-        ImGui.PushID(row.name)   -- makes "##give" unique for this row
+    local range = core.settings.tradeRange   -- colours the distance figure
+    for _, row in ipairs(core.roster) do
+        ImGui.TableNextRow()
+        ImGui.PushID(row.name)                -- unique ids for this row
 
-        -- Column 1: the checkbox.
+        -- Give column.
         ImGui.TableNextColumn()
-        local locked = actions.running or row.isMerc or not row.present
+        local locked = core.job.running or row.isMerc or not row.present
         ImGui.BeginDisabled(locked)
-        local was = group.isSelected(row.name)  -- current tick state from settings
-        local now = ImGui.Checkbox('##give', was)  -- draw the checkbox, returns the new state
-        if now ~= was then group.setSelected(row.name, now) markDirty() end  -- store a change and schedule a save
-        ImGui.EndDisabled()  -- matches BeginDisabled(locked)
-        -- Explain why a box is greyed out, or what the self row means.
-        if row.isMerc then tooltip('Mercenaries cannot receive items.')
-        elseif not row.present then tooltip('Not in this zone.')
-        elseif row.isSelf then tooltip('Keep a set in your own bags.') end
+        local was = core.isSelected(row.name)   -- current tick from settings
+        local now = ImGui.Checkbox('##give', was)   -- draw the box, get the new state
+        if now ~= was then core.setSelected(row.name, now) markDirty() end   -- store a change and schedule a save
+        ImGui.EndDisabled()   -- pairs with BeginDisabled(locked)
+        if row.isMerc then tooltip('Mercenaries cannot receive items.')   -- explain why the box is locked
+        elseif not row.present then tooltip('Not in this zone.')   -- member is in another zone
+        elseif row.isSelf then tooltip('Keep a set in your own bags.') end   -- caster row keeps a set
 
-        -- Column 2: name, with a tag for self and mercs.
+        -- Name column.
         ImGui.TableNextColumn()
         if row.isSelf then
             ImGui.Text(row.name .. ' (me)')
-        elseif row.isMerc then  -- mercenary row
-            colored(GREY, '%s (merc)', row.name)  -- grey name with a merc tag
+        elseif row.isMerc then   -- mercenary row
+            colored(GREY, '%s (merc)', row.name)   -- grey name with a merc tag
         else
-            ImGui.Text(row.name)  -- normal group member
+            ImGui.Text(row.name)   -- normal group member
         end
 
-        -- Column 3: class short name.
+        -- Class and distance columns.
         ImGui.TableNextColumn()
         ImGui.Text(row.class or '')
-
-        -- Column 4: distance, green inside trade range, amber outside.
         ImGui.TableNextColumn()
-        if not row.present then
-            colored(GREY, 'away')
-        elseif row.isSelf then  -- no distance shown for the cleric itself
-            ImGui.Text('')  -- empty cell keeps the columns aligned
+        if not row.present then   -- member is in another zone
+            colored(GREY, 'away')   -- grey away marker
+        elseif row.isSelf then   -- no distance for the caster
+            ImGui.Text('')                    -- keeps the columns aligned
         else
-            local c = row.distance <= range and GREEN or AMBER  -- green inside trade range, amber outside
-            colored(c, '%.0f', row.distance)  -- distance rounded to whole units
+            local c = row.distance <= range and GREEN or AMBER   -- inside trade range?
+            colored(c, '%.0f', row.distance)
         end
 
-        -- Column 5: what the last job delivered.
+        -- Last result column.
         ImGui.TableNextColumn()
         local c, text = resultText(row.name)
         colored(c, text)
-
-        ImGui.PopID()            -- must match PushID above
+        ImGui.PopID()                         -- pairs with PushID
     end
     ImGui.EndTable()
 end
@@ -350,113 +297,136 @@ end
 --[[--------------------------------------------------------------------------
   drawRunControls()
 
-  WHAT  : Hand Out and Stop buttons, the status line, and stock on hand.
-  WHY   : Start, stop and "what is it doing" belong together.
+  WHAT  : Hand Out, Pause / Resume and Stop, the status line, progress,
+          detected spells and stock on hand.
+  WHY   : Start, hold, stop and "what is it doing" belong together.
   WHERE : ui.render.
-  HOW   : Hand Out is disabled while running; Stop only while running.
-          Stock counts come straight from inventory.count. The last MQ2Cast
-          result is shown in amber when it was anything but CAST_SUCCESS.
-          While summoning, a progress line shows items made against the
-          target plus fizzle and interrupt counts from spells.progress.
+  HOW   : Hand Out only when idle. Pause / Resume and Stop only while
+          running; the Pause button reads Resume while paused. The status
+          line shows the hold reason in amber when holding. Progress comes
+          from casting.progress.
   WHEN  : Every frame.
 ----------------------------------------------------------------------------]]
 local function drawRunControls()
-    local s = config.settings
+    local s, job = core.settings, core.job
+    ImGui.BeginDisabled(job.running)
+    if ImGui.Button('Hand Out', 120, 0) then core.request() end   -- request a job; init.lua runs it
+    ImGui.EndDisabled()   -- pairs with BeginDisabled(job.running)
+    tooltip('Summon what is needed and trade it to every ticked member.')   -- hover help for Hand Out
 
-    -- Hand Out: only clickable when idle. It only sets a flag (no waiting).
-    ImGui.BeginDisabled(actions.running)
-    if ImGui.Button('Hand Out', 120, 0) then actions.request() end
-    ImGui.EndDisabled()
-    tooltip('Summon what is needed and trade it to every ticked member.')  -- hover help for Hand Out
-    ImGui.SameLine()  -- Stop on the same row
-    -- Stop: only clickable while a job runs.
-    ImGui.BeginDisabled(not actions.running)
-    if ImGui.Button('Stop', 80, 0) then actions.stop() end
-    ImGui.EndDisabled()
+    ImGui.SameLine()   -- Pause on the same row
+    ImGui.BeginDisabled(not job.running)   -- only usable while a job runs
+    if ImGui.Button(job.paused and 'Resume' or 'Pause', 80, 0) then core.togglePause() end   -- one button: Pause or Resume
+    tooltip(job.paused and 'Carry on from where the job stopped.'   -- hover help depends on the state
+        or 'Hold at the next safe point. A cast or trade in progress finishes first. RGMercs stays paused.')   -- help text while not paused
+    ImGui.SameLine()   -- Stop on the same row
+    if ImGui.Button('Stop', 80, 0) then core.stop() end   -- ask the job to stop
+    tooltip('End the job and clean up.')   -- hover help for Stop
+    ImGui.EndDisabled()   -- pairs with BeginDisabled(not job.running)
 
-    -- Status text next to the buttons.
-    ImGui.SameLine()
-    colored(actions.running and AMBER or GREEN, actions.status)
-
-    -- Live summon progress, only while a summon is running. Example:
-    -- "Summoning food: 9 of 14   fizzles 6   interrupts 0"
-    local p = spells.progress
-    if actions.running and p.kind then
-        colored(AMBER, 'Summoning %s: %d of %d   fizzles %d   interrupts %d',
-            p.kind, p.have, p.target, p.fizzles, p.interrupts)  -- values from spells.progress
+    ImGui.SameLine()   -- status text on the same row
+    if job.hold ~= '' then   -- the job is holding right now
+        colored(AMBER, '[%s] %s', job.hold, job.status)       -- holding
+    elseif job.paused then
+        colored(AMBER, '[Pause requested] %s', job.status)    -- not at a safe point yet
+    else
+        colored(job.running and AMBER or GREEN, job.status)
     end
 
-    -- Information lines.
+    local p = casting.progress   -- live summon numbers
+    if job.running and p.kind then   -- only while summoning
+        colored(AMBER, 'Summoning %s: %d of %d   fizzles %d   interrupts %d',   -- progress line
+            p.kind, p.have, p.target, p.fizzles, p.interrupts)   -- values from casting.progress
+    end
+    local note = casting.classNote()   -- nil for summoning classes
+    if note then colored(RED, note) end                       -- non summoning class
     colored(GREY, 'Food spell: %s   Drink spell: %s',
-        spells.food or 'none found', spells.drink or 'none found')
-    if spells.lastResult ~= '' then
-        colored(spells.lastResult == 'CAST_SUCCESS' and GREY or AMBER,  -- amber when the last cast did not succeed
-            'Last cast result: %s', spells.lastResult)  -- e.g. Last cast result: CAST_FIZZLE
+        casting.food or 'none found', casting.drink or 'none found')
+    if casting.lastResult ~= '' then
+        colored(casting.lastResult == 'CAST_SUCCESS' and GREY or AMBER,   -- amber when the last cast did not succeed
+            'Last cast result: %s', casting.lastResult)   -- e.g. Last cast result: CAST_FIZZLE
     end
-    colored(GREY, 'Carrying: %d %s, %d %s',  -- stock currently in the cleric's bags
-        inventory.count(s.foodItem), s.foodItem,  -- food count and item name
-        inventory.count(s.drinkItem), s.drinkItem)  -- drink count and item name
+    colored(GREY, 'Carrying: %d %s, %d %s',   -- stock in the caster bags
+        delivery.count(s.foodItem), s.foodItem,   -- food count and item name
+        delivery.count(s.drinkItem), s.drinkItem)   -- drink count and item name
 end
 
 --[[--------------------------------------------------------------------------
   drawOptions()
 
   WHAT  : The collapsible Options section.
-  WHY   : Settings that are set once per cleric stay out of the way.
+  WHY   : Settings changed rarely stay out of the way.
   WHERE : ui.render.
-  HOW   : Bound checkboxes, number inputs, text inputs and three radio buttons
-          for the accept method. A Refresh button re runs spell detection.
+  HOW   : Accept method radio buttons, bound checkboxes and number boxes in
+          three groups (general, Combat Hold and busy members, limits),
+          then spell and item text boxes and Refresh spells. Locked while a
+          job runs.
   WHEN  : Every frame when expanded.
 ----------------------------------------------------------------------------]]
 local function drawOptions()
-    -- CollapsingHeader returns false while collapsed; nothing else to draw.
     if not ImGui.CollapsingHeader('Options') then return end
-    local s = config.settings
-    ImGui.BeginDisabled(actions.running)
+    local s = core.settings
+    ImGui.BeginDisabled(core.job.running)   -- lock options while a job runs
 
-    -- Accept method: { saved value, label shown }.
+    -- How the receiving box presses Trade.
     ImGui.Text('Receiver accepts trade via:')
     for _, m in ipairs({ { 'dannet', 'DanNet' }, { 'eqbc', 'EQBC' }, { 'none', 'Manual' } }) do
         ImGui.SameLine()
-        if ImGui.RadioButton(m[2], s.acceptMethod == m[1]) then  -- returns true on the frame it is clicked
-            s.acceptMethod = m[1]  -- store the chosen method
-            markDirty()  -- schedule a save
+        if ImGui.RadioButton(m[2], s.acceptMethod == m[1]) then   -- true on the frame it is clicked
+            s.acceptMethod = m[1]   -- store the chosen method
+            markDirty()   -- schedule a save
         end
     end
 
-    -- On / off options. Keys match config.DEFAULTS.
+    -- General behaviour.
     checkbox('Top up only (DanNet)', 'topUp',
         'Ask each box how many it already carries and give only the difference.')
     checkbox('Keep my existing stock', 'preserveOwnStock',
-        'Summon for everyone on top of what is already in your bags.')  -- tooltip for preserveOwnStock
-    checkbox('Pause RGMercs during hand out', 'pauseRGMercs',  -- setting pauseRGMercs
-        'Sends /rgl pause at start and /rgl unpause at end, only if RGMercs is running.')  -- tooltip for pauseRGMercs
-    checkbox('Walk to members with MQ2Nav', 'useNav',  -- setting useNav
-        'Walk into trade range when a member is too far away.')  -- tooltip for useNav
-    checkbox('Cast with MQ2Cast (auto retry fizzles)', 'useMQ2Cast',  -- setting useMQ2Cast
-        'MQ2Cast detects fizzles and interrupts and recasts up to Max tries. Loaded for the job if needed.')  -- tooltip for useMQ2Cast
-    checkbox('Meditate when out of mana', 'medForMana',  -- setting medForMana
-        'Sit and wait for mana instead of skipping the cast.')  -- tooltip for medForMana
-    checkbox('Restore borrowed spell gem', 'restoreGem',  -- setting restoreGem
-        'Put the original spell back in the gem when finished.')  -- tooltip for restoreGem
-    checkbox('Debug trace', 'debug', 'Print every command and decision to chat.')  -- setting debug
+        'Summon for everyone on top of what is already in your bags.')   -- hover help for preserveOwnStock
+    checkbox('Pause RGMercs during hand out', 'pauseRGMercs',   -- setting pauseRGMercs
+        'Sends /rgl pause at start and /rgl unpause at end, only if RGMercs is running.')   -- hover help for pauseRGMercs
+    checkbox('Walk to members with MQ2Nav', 'useNav',   -- setting useNav
+        'Walk into trade range when a member is too far away.')   -- hover help for useNav
+    checkbox('Cast with MQ2Cast (auto retry fizzles)', 'useMQ2Cast',   -- setting useMQ2Cast
+        'MQ2Cast detects fizzles and interrupts and recasts up to Max tries. Loaded for the job if needed.')   -- hover help for useMQ2Cast
+    checkbox('Meditate when out of mana', 'medForMana',   -- setting medForMana
+        'Sit and wait for mana instead of skipping the cast.')   -- hover help for medForMana
+    checkbox('Restore borrowed spell gem', 'restoreGem',   -- setting restoreGem
+        'Put the original spell back in the gem when finished.')   -- hover help for restoreGem
+    checkbox('Debug trace', 'debug', 'Print every command and decision to chat.')   -- setting debug
 
-    -- Numbers: label, key, min, max, step, ctrl step, tooltip, width.
+    -- Combat Hold and busy members.
+    ImGui.Separator()
+    checkbox('Combat Hold', 'combatHold',
+        'Hold the job while you are in combat. Any open trade is cancelled and the items come back.')
+    checkbox('Hand back to RGMercs during combat', 'combatHandBack',   -- setting combatHandBack
+        'While holding for combat, unpause RGMercs so it can fight and heal, then pause it again afterwards.')   -- hover help for combatHandBack
+    intInput('Combat settle (s)', 'combatSettleSec', 0, 60, 1, 5,   -- setting combatSettleSec
+        'Seconds out of combat before the job carries on, in case another mob joins.', 100)   -- hover help for combatSettleSec
+    intInput('Busy tries', 'busyTries', 1, 10, 1, 1,   -- setting busyTries
+        'A member who is fighting or does not accept goes to the back of the line. Give up after this many tries.', 100)   -- hover help for busyTries
+    intInput('Busy retry (s)', 'busyRetrySec', 2, 120, 1, 10,   -- setting busyRetrySec
+        'Seconds before a busy member is tried again.', 100)   -- hover help for busyRetrySec
+
+    -- Limits.
+    ImGui.Separator()
     intInput('Spell gem', 'gem', 1, 13, 1, 1, 'Gem to borrow when a summon spell is not memorised.', 100)
     intInput('Max tries per cast', 'castMaxTries', 1, 20, 1, 5, 'MQ2Cast -maxtries. Attempts per cast before it reports failure.', 100)
-    intInput('Summon time limit (min)', 'summonTimeoutMin', 0, 240, 5, 15, 'Summoning keeps casting through fizzles until the count is reached. This only stops it after this many minutes. 0 = no limit.', 100)
-    intInput('Trade range', 'tradeRange', 5, 25, 1, 5, 'Units. EQ allows about 20.', 100)  -- setting tradeRange
-    intInput('Accept timeout (s)', 'tradeTimeoutSec', 3, 60, 1, 5, 'Cancel the trade if not accepted in this time.', 100)  -- setting tradeTimeoutSec
-    intInput('Meditate timeout (s)', 'medTimeoutSec', 10, 600, 10, 60, 'Longest wait for mana per cast.', 100)  -- setting medTimeoutSec
+    intInput('Summon time limit (min)', 'summonTimeoutMin', 0, 240, 5, 15,   -- setting summonTimeoutMin
+        'Summoning keeps casting through fizzles until the count is reached. This stops it after this many minutes, not counting time held. 0 = no limit.', 100)   -- hover help for summonTimeoutMin
+    intInput('Trade range', 'tradeRange', 5, 25, 1, 5, 'Units. EQ allows about 20.', 100)   -- setting tradeRange
+    intInput('Accept timeout (s)', 'tradeTimeoutSec', 3, 60, 1, 5, 'Cancel the trade if not accepted in this time.', 100)   -- setting tradeTimeoutSec
+    intInput('Walk timeout (s)', 'navTimeoutSec', 5, 120, 5, 15, 'Longest walk to one member.', 100)   -- setting navTimeoutSec
+    intInput('Meditate timeout (s)', 'medTimeoutSec', 10, 600, 10, 60, 'Longest wait for mana per cast.', 100)   -- setting medTimeoutSec
 
-    -- Text: usually left alone, there for unusual servers.
+    -- Names.
+    ImGui.Separator()
     textInput('Food spell override', 'foodSpell', 'Leave blank to auto detect.')
     textInput('Drink spell override', 'drinkSpell', 'Leave blank to auto detect.')
-    textInput('Food item name', 'foodItem', 'Learned automatically after the first cast.')
-    textInput('Drink item name', 'drinkItem', 'Learned automatically after the first cast.')  -- setting drinkItem
-
-    if ImGui.Button('Refresh spells') then spells.detect() end  -- re run spell detection after scribing or editing an override
-    ImGui.EndDisabled()  -- matches BeginDisabled at the top of Options
+    textInput('Food item name', 'foodItem', 'Learned automatically after the first cast.')   -- setting foodItem
+    textInput('Drink item name', 'drinkItem', 'Learned automatically after the first cast.')   -- setting drinkItem
+    if ImGui.Button('Refresh spells') then casting.detect() end   -- re run detection after scribing or editing
+    ImGui.EndDisabled()   -- pairs with BeginDisabled at the top
 end
 
 --[[--------------------------------------------------------------------------
@@ -465,50 +435,46 @@ end
   WHAT  : Draws the whole window for one frame.
   WHY   : The single entry point mq.imgui.init calls.
   WHERE : Registered in init.lua.
-  HOW   : Begin, counts, roster, run controls, options, End, then flushSave.
+  HOW   : Begin, counts, roster, run controls, options, End, flushSave.
+          End is always called, even when the window is collapsed.
   WHEN  : Every frame while ui.open is true.
 ----------------------------------------------------------------------------]]
 function ui.render()
     if not ui.open then return end
-    -- Starting size on first ever open; after that ImGui remembers it.
-    ImGui.SetNextWindowSize(520, 460, ImGuiCond.FirstUseEver)
-    local show
-    -- Begin returns: still open (false when X clicked), and whether to draw
-    -- (false when collapsed). "##clericfood" is a hidden stable window ID.
-    ui.open, show = ImGui.Begin('Cleric Food and Drink##clericfood', ui.open)
-    if show then
-        drawCounts()
-        ImGui.Separator()  -- divider line
-        drawRoster()  -- checkbox list of the group
-        ImGui.Separator()  -- divider line
-        drawRunControls()  -- Hand Out, Stop, status, progress, stock
-        ImGui.Separator()  -- divider line
-        drawOptions()  -- collapsible settings
+    ImGui.SetNextWindowSize(540, 500, ImGuiCond.FirstUseEver)
+    local show   -- second value from Begin: is the window expanded
+    ui.open, show = ImGui.Begin('Provisions##provisions', ui.open)   -- draw the frame; X button sets ui.open false
+    if show then   -- skip the contents when collapsed
+        drawCounts()   -- food and drink counts
+        ImGui.Separator()   -- divider line
+        drawRoster()   -- checkbox list of the group
+        ImGui.Separator()   -- divider line
+        drawRunControls()   -- buttons, status, progress, stock
+        ImGui.Separator()   -- divider line
+        drawOptions()   -- collapsible settings
     end
-    ImGui.End()          -- always called, even when show is false
-    ui.flushSave(false)  -- debounced save of any change this frame
+    ImGui.End()            -- always, even when show is false
+    ui.flushSave(false)    -- debounced save of any change this frame
 end
 
-return ui
+return ui   -- hand the module table to require('provisions.ui')
 
 --[[==========================================================================
-  END OF FILE : clericfood/ui.lua
+  END OF FILE : provisions/ui.lua
 
   SUMMARY OF PUBLIC API
-    open                    bool    Window visibility.
-    render()                        Draw one frame (mq.imgui.init callback).
-    flushSave(force)                Debounced settings write.
+    open               bool   Window visibility.
+    render()                  Draw one frame (mq.imgui.init callback).
+    flushSave(force)          Debounced settings write.
 
-  DEPENDENCIES : mq, ImGui, clericfood.utils, config, inventory, spells, group,
-                 actions.
+  DEPENDENCIES : mq, ImGui, provisions.core, delivery, casting.
 
   HOW TO EDIT SAFELY
-    - Nothing in this file may call mq.delay or any function that waits.
-    - Add an option: add the key to config.DEFAULTS, then one checkbox,
-      intInput or textInput line in drawOptions.
-    - Food and drink counts are global (same for every ticked member). A per
-      member override column can be added to drawRoster later by storing
-      counts in settings.selected[name] instead of true.
-    - Change the 80 limit: edit both intInput lines in drawCounts and the
-      clamp lines in config.load and init.lua.
+    - Nothing in this file may call mq.delay or anything that waits.
+    - Add an option: a key in core.DEFAULTS (plus a clamp in core.load for
+      numbers), then one checkbox, intInput or textInput line here.
+    - Buttons only call core.request, core.togglePause and core.stop. Never
+      run job steps from here.
+    - Change the 80 limit: both intInput lines in drawCounts, the clamps in
+      core.load and the /prov food and drink handler in init.lua.
 ==========================================================================]]--
