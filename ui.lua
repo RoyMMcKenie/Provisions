@@ -1,8 +1,16 @@
 --[[==========================================================================
   FILE        : provisions/ui.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  Renamed from ClericFood ui.lua; window title is now
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  Picking a link in Options now also asks for its
+                       plugin to be loaded (core.requestLinkLoad). The
+                       tooltip says so.
+                2.1.0  The link choice in Options is now "Talk to other
+                       boxes via" with MQRemote first (the default), then
+                       DanNet, EQBC and Manual. Adds a Check links button
+                       next to Stop. Shows "no MQRemote" (or "no DanNet")
+                       results in red. Top up no longer says DanNet only.
+                2.0.0  Renamed from ClericFood ui.lua; window title is now
                        Provisions. Adds a Pause / Resume button next to Stop,
                        shows the current hold (Paused or Combat hold) on the
                        status line, shows a warning for classes without
@@ -198,8 +206,9 @@ end
   WHY   : Shows at a glance who was served, who is waiting, who was missed.
   WHERE : drawRoster.
   HOW   : From core.job.results. Green when full or kept or already
-          stocked, amber when partly served or busy and waiting, red when
-          nothing arrived or given up, blank when not part of the last job.
+          stocked or the link answered, amber when partly served or busy
+          and waiting, red when nothing arrived, given up, or no link
+          answer ("no MQRemote"), blank when not part of the last job.
   WHEN  : Every frame.
 ----------------------------------------------------------------------------]]
 local function resultText(name)
@@ -210,6 +219,7 @@ local function resultText(name)
     local s = core.settings
     local full = (r.food or 0) >= s.foodCount and (r.drink or 0) >= s.drinkCount   -- true when at least the full counts arrived
     if r.note == 'busy, gave up' then return RED, text end          -- missed
+    if r.note and r.note:find('^no ') then return RED, text end     -- no link answer
     if r.note and r.note:find('^busy') then return AMBER, text end  -- waiting
     if r.note or full then return GREEN, text end                   -- kept, stocked, full
     if (r.food or 0) + (r.drink or 0) > 0 then return AMBER, text end
@@ -301,8 +311,9 @@ end
           detected spells and stock on hand.
   WHY   : Start, hold, stop and "what is it doing" belong together.
   WHERE : ui.render.
-  HOW   : Hand Out only when idle. Pause / Resume and Stop only while
-          running; the Pause button reads Resume while paused. The status
+  HOW   : Hand Out and Check links only when idle. Pause / Resume and
+          Stop only while running; the Pause button reads Resume while
+          paused. The status
           line shows the hold reason in amber when holding. Progress comes
           from casting.progress.
   WHEN  : Every frame.
@@ -323,6 +334,12 @@ local function drawRunControls()
     if ImGui.Button('Stop', 80, 0) then core.stop() end   -- ask the job to stop
     tooltip('End the job and clean up.')   -- hover help for Stop
     ImGui.EndDisabled()   -- pairs with BeginDisabled(not job.running)
+
+    ImGui.SameLine()   -- Check links on the same row
+    ImGui.BeginDisabled(job.running)   -- only when idle
+    if ImGui.Button('Check links', 100, 0) then core.requestCheck() end   -- init.lua runs the check
+    ImGui.EndDisabled()   -- pairs with BeginDisabled(job.running)
+    tooltip('Ask every ticked member to answer over the chosen link, without summoning anything.')   -- hover help
 
     ImGui.SameLine()   -- status text on the same row
     if job.hold ~= '' then   -- the job is holding right now
@@ -357,7 +374,8 @@ end
   WHAT  : The collapsible Options section.
   WHY   : Settings changed rarely stay out of the way.
   WHERE : ui.render.
-  HOW   : Accept method radio buttons, bound checkboxes and number boxes in
+  HOW   : Link method radio buttons (MQRemote, DanNet, EQBC, Manual; a
+          pick also requests the plugin load), bound checkboxes and number boxes in
           three groups (general, Combat Hold and busy members, limits),
           then spell and item text boxes and Refresh spells. Locked while a
           job runs.
@@ -368,19 +386,21 @@ local function drawOptions()
     local s = core.settings
     ImGui.BeginDisabled(core.job.running)   -- lock options while a job runs
 
-    -- How the receiving box presses Trade.
-    ImGui.Text('Receiver accepts trade via:')
-    for _, m in ipairs({ { 'dannet', 'DanNet' }, { 'eqbc', 'EQBC' }, { 'none', 'Manual' } }) do
-        ImGui.SameLine()
+    -- How commands reach the other boxes.
+    ImGui.Text('Talk to other boxes via:')
+    tooltip('MQRemote: /rc, checks and presses Trade. DanNet: /dex and /dquery. EQBC: presses Trade only. Manual: press Trade yourself. Picking one loads its plugin here if needed.')
+    for _, m in ipairs({ { 'mqremote', 'MQRemote' }, { 'dannet', 'DanNet' }, { 'eqbc', 'EQBC' }, { 'none', 'Manual' } }) do
+        ImGui.SameLine()   -- radio buttons side by side
         if ImGui.RadioButton(m[2], s.acceptMethod == m[1]) then   -- true on the frame it is clicked
             s.acceptMethod = m[1]   -- store the chosen method
             markDirty()   -- schedule a save
+            core.requestLinkLoad()   -- init.lua loads the plugin if it is missing
         end
     end
 
     -- General behaviour.
-    checkbox('Top up only (DanNet)', 'topUp',
-        'Ask each box how many it already carries and give only the difference.')
+    checkbox('Top up only', 'topUp',
+        'Ask each box how many it already carries and give only the difference. Needs MQRemote or DanNet.')
     checkbox('Keep my existing stock', 'preserveOwnStock',
         'Summon for everyone on top of what is already in your bags.')   -- hover help for preserveOwnStock
     checkbox('Pause RGMercs during hand out', 'pauseRGMercs',   -- setting pauseRGMercs
@@ -473,7 +493,8 @@ return ui   -- hand the module table to require('provisions.ui')
     - Nothing in this file may call mq.delay or anything that waits.
     - Add an option: a key in core.DEFAULTS (plus a clamp in core.load for
       numbers), then one checkbox, intInput or textInput line here.
-    - Buttons only call core.request, core.togglePause and core.stop. Never
+    - Buttons only call core.request, core.requestCheck,
+      core.requestLinkLoad, core.togglePause and core.stop. Never
       run job steps from here.
     - Change the 80 limit: both intInput lines in drawCounts, the clamps in
       core.load and the /prov food and drink handler in init.lua.

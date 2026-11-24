@@ -1,8 +1,25 @@
 --[[==========================================================================
   FILE        : provisions/delivery.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  New file. Merges the ClericFood 1.3.2 files
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  Adds ensureLink: when the chosen link plugin is not
+                       loaded on the caster it is loaded with the documented
+                       /plugin <name> load (which also adds it to
+                       MacroQuest.ini so it loads by itself next session).
+                       Adds loadOnOthers: loads the chosen link plugin on
+                       members who did not answer, sent through any other
+                       link plugin that is up here (DanNet or EQBC).
+                       remote now goes through the new local sendVia.
+                2.1.0  MQRemote is now the default link to other boxes.
+                       Part 2 is rewritten around it: linkName, linkReady
+                       (is the plugin loaded here), remote (one command to
+                       one box for MQRemote, DanNet or EQBC), probe (can the
+                       box be reached, is it fighting, what does it carry)
+                       and onPong (stores the answer a box sends back).
+                       DanNet mode now also checks the DanNet peer list.
+                       queryCount is gone; probe returns the counts.
+                       remoteAccept now goes through remote.
+                2.0.0  New file. Merges the ClericFood 1.3.2 files
                        inventory.lua and trade.lua. Adds peerInCombat (asks
                        a box through DanNet whether it is fighting), cancels
                        an open trade when the caster is attacked, returns a
@@ -15,8 +32,9 @@
   WHAT  : Everything that moves items: counting what is in the bags,
           clearing the cursor, lifting an exact quantity onto the cursor,
           walking into range, running a trade with one member, pressing
-          Trade on the receiving box, and asking other boxes through DanNet
-          what they carry and whether they are in combat.
+          Trade on the receiving box, and asking other boxes (through
+          MQRemote or DanNet) whether they can be reached, what they carry
+          and whether they are in combat.
 
   WHY   : Handing out "7 bread" means lifting exactly 7 off a stack of 20,
           dropping them on a player, and having both sides press Trade.
@@ -25,13 +43,14 @@
           in one file with nothing else in it.
 
   WHERE : Required by casting.lua (bag counts and cursor) and init.lua
-          (trades, DanNet counts, busy checks).
+          (trades, link checks, Top up counts, busy checks).
 
   HOW   : FindItem and FindItemCount for lookups, /autoinventory to stash,
           /itemnotify with /shiftkey or /ctrlkey for pickups, the QuantityWnd
           slider for partial stacks, /click left target to offer an item,
-          /notify TradeWnd buttons to accept or cancel, /dex or /bct to make
-          the other box accept, and /nav to walk.
+          /notify TradeWnd buttons to accept or cancel, /rc (MQRemote), /dex
+          (DanNet) or /bct (EQBC) to make the other box accept, and /nav
+          to walk.
 
   WHEN  : Bag helpers run throughout a job. Trades run after summoning.
 
@@ -53,6 +72,10 @@
         combat  the caster was attacked; the trade was cancelled and the
                 member is tried again after the Combat Hold
         failed  a problem on the caster's side, such as a failed pickup
+    - The "link" is how commands reach other boxes. MQRemote (the
+      default) can only send commands, so questions use a round trip: we
+      send a command that makes the other box send "/prov pong ..." back
+      to us with its own values filled in. See askMQRemote.
 ==========================================================================]]--
 
 local mq   = require('mq')                -- TLO access, mq.delay, mq.gettime
@@ -287,21 +310,290 @@ function delivery.pickUp(itemName, wanted)
 end
 
 --[[==========================================================================
-  PART 2 : DANNET QUERIES
+  PART 2 : TALKING TO OTHER BOXES (MQRemote, DanNet, EQBC)
 ==========================================================================]]--
 
---[[--------------------------------------------------------------------------
-  dannetLoaded()
+--- Link method names ------------------------------------------------------------
+-- WHAT : The plugin each link method needs on the caster, and the word used
+--        for it in chat.
+-- WHY  : One table keeps the "which plugin, what to call it" knowledge in a
+--        single place for the checks and messages below.
+-- WHERE: delivery.linkReady, delivery.linkName.
+-- HOW  : acceptMethod value -> { plugin, label }. 'none' (Manual) needs no
+--        plugin and is not listed.
+-- WHEN : Read before every job and every link check.
+local LINKS = {
+    mqremote = { plugin = 'MQRemote',  label = 'MQRemote' },   -- /rc, the default
+    dannet   = { plugin = 'MQ2DanNet', label = 'DanNet' },     -- /dex and /dquery
+    eqbc     = { plugin = 'MQ2EQBC',   label = 'EQBC' },       -- /bct
+}
 
-  WHAT  : True when the MQ2DanNet plugin is loaded on this client.
-  WHY   : Every DanNet feature is optional; without the plugin the package
-          falls back to simpler behaviour.
-  WHERE : delivery.query.
-  HOW   : Plugin TLO.
-  WHEN  : Before every query.
+--[[--------------------------------------------------------------------------
+  delivery.linkName()
+
+  WHAT  : Returns the display name of the chosen link method, for example
+          "MQRemote", or "Manual" when none is used.
+  WHY   : Chat messages and the window should name the method the operator
+          picked, not an internal key.
+  WHERE : init.lua link check messages, delivery.linkReady.
+  HOW   : Looks up core.settings.acceptMethod in LINKS.
+  WHEN  : Whenever a message mentions the link.
 ----------------------------------------------------------------------------]]
-local function dannetLoaded()
-    return mq.TLO.Plugin('MQ2DanNet').IsLoaded() == true
+function delivery.linkName()
+    local link = LINKS[core.settings.acceptMethod]   -- nil for 'none'
+    return link and link.label or 'Manual'
+end
+
+--[[--------------------------------------------------------------------------
+  pluginLoaded(plugin)
+
+  WHAT  : True when the named plugin is loaded on this character.
+  WHY   : linkReady, ensureLink and loadOnOthers all ask the same question;
+          one helper keeps the test identical everywhere.
+  WHERE : This part only.
+  HOW   : Plugin TLO IsLoaded, compared with true so nil counts as no.
+  WHEN  : Before every job, every link check and after a load command.
+----------------------------------------------------------------------------]]
+local function pluginLoaded(plugin)
+    return mq.TLO.Plugin(plugin).IsLoaded() == true
+end
+
+--[[--------------------------------------------------------------------------
+  delivery.linkReady()
+
+  WHAT  : Checks that the plugin for the chosen link method is loaded on
+          the caster. Returns true, or false plus a message saying how to
+          fix it.
+  WHY   : Without the plugin no command can reach the other boxes, so every
+          trade would time out three times per member. Finding out before
+          the first cast saves the mana and the wait.
+  WHERE : init.lua run (before summoning) and linkCheck.
+  HOW   : Plugin TLO IsLoaded on the plugin from LINKS. Manual always
+          passes.
+  WHEN  : At the start of every job and every link check.
+----------------------------------------------------------------------------]]
+function delivery.linkReady()
+    local link = LINKS[core.settings.acceptMethod]
+    if not link then return true end   -- Manual: nothing to check
+    if pluginLoaded(link.plugin) then return true end   -- plugin is up
+    -- The documented way to load any plugin is /plugin <name> load.
+    return false, string.format('%s is not loaded on this character. Type /plugin %s load, then try again.',
+        link.label, link.plugin)
+end
+
+--[[--------------------------------------------------------------------------
+  delivery.ensureLink()
+
+  WHAT  : Makes sure the plugin for the chosen link method is loaded on the
+          caster, loading it when it is not. Returns true, or false plus a
+          message saying what to do.
+  WHY   : The first MQRemote test stopped with "MQRemote is not loaded on
+          this character". Loading the plugin is one documented command, so
+          the script should do it instead of making the operator type it.
+  WHERE : init.lua tick (when a link is picked in Options, and once at
+          startup) and init.lua linkCheck (before every hand out and every
+          Check links).
+  HOW   : 1. Manual needs nothing. Already loaded: done.
+          2. /plugin <name> load. The MacroQuest docs say load also adds
+             the plugin to the [Plugins] section of MacroQuest.ini, so it
+             loads by itself in the next session.
+          3. Wait up to 3 seconds for the Plugin TLO to say it is loaded.
+          The plugin is never unloaded afterwards: the other boxes need it
+          to answer, and unloading a plugin can end Lua scripts.
+  WHEN  : See WHERE.
+----------------------------------------------------------------------------]]
+function delivery.ensureLink()
+    local link = LINKS[core.settings.acceptMethod]
+    if not link then return true end   -- Manual: nothing to load
+    if pluginLoaded(link.plugin) then return true end   -- already up
+    core.echo('%s is not loaded here. Loading it now.', link.label)
+    core.cmd('/plugin %s load', link.plugin)   -- documented /plugin <name> load
+    if core.delay(3000, function() return pluginLoaded(link.plugin) end) then
+        core.good('%s loaded. It will also load by itself next time.', link.label)
+        return true
+    end
+    return false, string.format('%s could not be loaded. Type /plugin %s load and read what MacroQuest says.',   -- load failed: tell the operator
+        link.label, link.plugin)   -- for example MQRemote, MQRemote
+end
+
+--[[--------------------------------------------------------------------------
+  sendVia(method, name, command) and delivery.remote(name, command)
+
+  WHAT  : Runs one slash command on another box, through the given link
+          (sendVia) or the link chosen in Options (delivery.remote).
+  WHY   : Pressing Trade on the receiver and asking it questions both need
+          a command to run on that box, and the syntax differs per plugin.
+  WHERE : remoteAccept, askMQRemote and loadOnOthers.
+  HOW   : MQRemote: /rc server <Name> <command>, the documented form for
+                    one named character on the same server.
+          DanNet:   /dex <peer> <command>; peer names are lower case.
+          EQBC:     /bct <Name> //<command>; EQBC needs the double slash.
+          Manual:   nothing is sent.
+          The text goes through core.cmd('%s', ...) so a % in an item name
+          can never break the format.
+  WHEN  : During trades and link checks.
+----------------------------------------------------------------------------]]
+local function sendVia(method, name, command)
+    if method == 'mqremote' then
+        core.cmd('%s', string.format('/rc server %s %s', name, command))   -- MQRemote: one named box on this server
+    elseif method == 'dannet' then   -- DanNet branch
+        core.cmd('%s', string.format('/dex %s %s', name:lower(), command))   -- DanNet: lower case peer name
+    elseif method == 'eqbc' then   -- EQBC branch
+        -- EQBC wants //command; strip our single slash and add two.
+        core.cmd('%s', string.format('/bct %s //%s', name, command:gsub('^/', '')))
+    end
+    -- 'none': intentionally nothing.
+end
+
+-- Public form: always uses the link chosen in Options.
+function delivery.remote(name, command)
+    sendVia(core.settings.acceptMethod, name, command)
+end
+
+--[[--------------------------------------------------------------------------
+  delivery.loadOnOthers(names)
+
+  WHAT  : Tries to load the chosen link plugin on members who did not
+          answer, by sending /plugin <name> load to them through a
+          different link that is already up on the caster. Returns the
+          name of the link used (for example "DanNet"), or nil when no
+          other link is available.
+  WHY   : A box without MQRemote cannot hear an MQRemote command, so the
+          only way to load MQRemote there from here is through another
+          plugin such as DanNet, which many setups already run.
+  WHERE : init.lua linkCheck, after the first round of questions.
+  HOW   : Tries the LINKS entries other than the chosen one, in a fixed
+          order (DanNet, EQBC, MQRemote). The first one whose plugin is
+          loaded here sends /plugin <name> load to every name. The caller
+          waits and asks again.
+  WHEN  : Only when someone did not answer.
+----------------------------------------------------------------------------]]
+function delivery.loadOnOthers(names)
+    local chosen = core.settings.acceptMethod
+    local want = LINKS[chosen]
+    if not want then return nil end   -- Manual: nothing to load
+    for _, method in ipairs({ 'dannet', 'eqbc', 'mqremote' }) do   -- helper links, first loaded one wins
+        if method ~= chosen and pluginLoaded(LINKS[method].plugin) then
+            for _, name in ipairs(names) do   -- one load command per silent member
+                sendVia(method, name, string.format('/plugin %s load', want.plugin))
+            end
+            return LINKS[method].label
+        end
+    end
+    return nil   -- no other link is up here
+end
+
+--- MQRemote reply store --------------------------------------------------------------
+-- WHAT : replies holds the last answer from each box, keyed by lower case
+--        name: { token, combat, food, drink }. nextToken numbers each
+--        question.
+-- WHY  : MQRemote only sends commands; it has no documented way to read a
+--        value back from another box. The workaround is to ask the other
+--        box to send a /prov pong command back to us with its values filled
+--        in, which our own /prov handler stores here. The token makes sure
+--        an old, late answer is never mistaken for the current one.
+-- WHERE: delivery.onPong writes; askMQRemote reads.
+-- HOW  : Plain tables.
+-- WHEN : During link checks, Top up planning and busy checks.
+local replies, nextToken = {}, 0
+
+--[[--------------------------------------------------------------------------
+  delivery.onPong(token, name, combat, food, drink)
+
+  WHAT  : Stores an answer that another box sent back through MQRemote.
+  WHY   : This is the receiving half of the question and answer trick
+          described above.
+  WHERE : init.lua onCommand, for /prov pong ... lines.
+  HOW   : All arguments arrive as text. Numbers are converted; a missing or
+          non numeric count is stored as nil, meaning "unknown".
+  WHEN  : Whenever a /prov pong command arrives, which MacroQuest runs
+          while the job waits in mq.delay.
+----------------------------------------------------------------------------]]
+function delivery.onPong(token, name, combat, food, drink)
+    if not name then return end   -- malformed reply: ignore
+    replies[name:lower()] = {
+        token  = tonumber(token),                 -- which question this answers
+        combat = combat,                          -- Me.CombatState text, e.g. COMBAT
+        food   = tonumber(food),                  -- nil when not a number
+        drink  = tonumber(drink),
+    }
+    core.debug('pong from %s: token %s, %s, food %s, drink %s', name,
+        tostring(token), tostring(combat), tostring(food), tostring(drink))   -- shown only with Debug trace on
+end
+
+--[[--------------------------------------------------------------------------
+  countExpr(itemName)
+
+  WHAT  : Returns the MacroQuest text the other box should fill in for an
+          item count, or a literal 0 when the item name is not known yet.
+  WHY   : The item names are learned from the first summon. Before that
+          they are empty, and ${FindItemCount[=]} would not be a useful
+          question.
+  WHERE : askMQRemote.
+  HOW   : ${FindItemCount[=<name>]}; the = asks for an exact name match.
+  WHEN  : Each time a question is built.
+----------------------------------------------------------------------------]]
+local function countExpr(itemName)
+    if not itemName or itemName == '' then return '0' end   -- unknown item: answer 0
+    return '${FindItemCount[=' .. itemName .. ']}'
+end
+
+--[[--------------------------------------------------------------------------
+  askMQRemote(name, timeoutMs)
+
+  WHAT  : Asks another box, through MQRemote, for its combat state and how
+          much food and drink it carries. Returns the reply table, or nil
+          when no answer came back in time.
+  WHY   : An answer proves MQRemote works on both boxes, which is the link
+          check, and the same answer feeds Top up and the busy check.
+  WHERE : delivery.probe.
+  HOW   : 1. Take a new token.
+          2. Send, with /noparse in front so the caster does NOT fill in the
+             ${} values itself:
+               /rc server <Name> /rc server <Me> /prov pong <token>
+                   ${Me.CleanName} ${Me.CombatState} <food> <drink>
+             The other box receives "/rc server <Me> /prov pong ...", fills
+             in its own ${} values (the MQRemote docs show this /noparse
+             pattern), and sends /prov pong back to us.
+          3. Wait until delivery.onPong has stored a reply with our token.
+  WHEN  : Link checks, Top up planning, and before each trade attempt.
+----------------------------------------------------------------------------]]
+local function askMQRemote(name, timeoutMs)
+    nextToken = nextToken + 1
+    local token, me = nextToken, (mq.TLO.Me.CleanName() or '')
+    local s = core.settings   -- item names come from settings
+    local back = string.format('/rc server %s /prov pong %d ${Me.CleanName} ${Me.CombatState} %s %s',   -- the command the other box runs
+        me, token, countExpr(s.foodItem), countExpr(s.drinkItem))   -- the command the other box runs
+    core.cmd('%s', string.format('/noparse /rc server %s %s', name, back))
+    -- Wait for an answer carrying this token.
+    mq.delay(timeoutMs or 3000, function()
+        local r = replies[name:lower()]
+        return r ~= nil and r.token == token
+    end)
+    local r = replies[name:lower()]   -- whatever arrived, fresh or not
+    if r and r.token == token then return r end   -- fresh answer
+    return nil   -- no answer in time
+end
+
+--[[--------------------------------------------------------------------------
+  dannetPeer(name)
+
+  WHAT  : True when a box appears in this client's DanNet peer list.
+  WHY   : The DanNet link check. A box that is missing cannot receive /dex,
+          which is exactly what broke the first live test (a VPN had moved
+          DanNet onto the wrong network interface).
+  WHERE : delivery.probe.
+  HOW   : DanNet.Peers is a | separated list such as "mosswyn|technology|".
+          Each piece is compared without regard to case.
+  WHEN  : Link checks and Top up planning.
+----------------------------------------------------------------------------]]
+local function dannetPeer(name)
+    local list = mq.TLO.DanNet.Peers() or ''   -- empty when nobody is connected
+    local want = name:lower()
+    for peer in tostring(list):gmatch('[^|]+') do   -- each name between the pipes
+        if peer:lower() == want then return true end
+    end
+    return false
 end
 
 --[[--------------------------------------------------------------------------
@@ -309,18 +601,17 @@ end
 
   WHAT  : Runs one TLO query on another box through DanNet and returns the
           answer as text, or nil when there was no answer.
-  WHY   : Top up mode needs item counts and the busy check needs the combat
-          state of the other box.
-  WHERE : delivery.queryCount, delivery.peerInCombat.
+  WHY   : DanNet can read values directly, so in DanNet mode it is used
+          for the combat state and Top up counts.
+  WHERE : askDanNet.
   HOW   : /dquery <peer> -q "<query>". The DanNet author documents that a
           new /dquery clears the stored answer and its Received timestamp,
           and that Received is filled in when the reply arrives. A short
           pause after the command lets the clear happen, then the wait is on
           DanNet(peer).Q(query).Received. Peer names are lower case.
-  WHEN  : At job start (Top up) and before each trade (busy check).
+  WHEN  : DanNet mode only.
 ----------------------------------------------------------------------------]]
 function delivery.query(name, query, timeoutMs)
-    if not dannetLoaded() then return nil end   -- no DanNet, no answer
     local peer = name:lower()                   -- DanNet peer names are lower case
     core.cmd('/dquery %s -q "%s"', peer, query)
     mq.delay(100)   -- let DanNet clear the previous answer first
@@ -334,36 +625,75 @@ function delivery.query(name, query, timeoutMs)
 end
 
 --[[--------------------------------------------------------------------------
-  delivery.queryCount(name, itemName)
+  askDanNet(name, wantCounts)
 
-  WHAT  : Asks another box how many of an item it carries. Returns a number
-          or nil.
-  WHY   : Top up mode gives only the shortfall.
-  WHERE : init.lua planNeeds when topUp is on.
-  HOW   : delivery.query with FindItemCount[=item], then tonumber.
-  WHEN  : Once per member per item at job start.
+  WHAT  : The DanNet version of askMQRemote. Returns a reply table, or nil
+          when the box is not a DanNet peer or did not answer.
+  WHY   : Lets the rest of the package use one reply format whichever link
+          is chosen.
+  WHERE : delivery.probe.
+  HOW   : dannetPeer first, then a Me.CombatState query, then the two item
+          counts only when wantCounts is true (each query takes time).
+  WHEN  : Link checks, Top up planning, busy checks in DanNet mode.
 ----------------------------------------------------------------------------]]
-function delivery.queryCount(name, itemName)
-    local answer = tonumber(delivery.query(name, string.format('FindItemCount[=%s]', itemName)))
-    core.debug('%s carries %s %s', name, tostring(answer), itemName)
-    return answer   -- nil when the box did not answer
+local function askDanNet(name, wantCounts)
+    if not dannetPeer(name) then return nil end   -- not connected at all
+    local combat = delivery.query(name, 'Me.CombatState', 1500)
+    if combat == nil then return nil end   -- connected but silent
+    local r, s = { combat = combat }, core.settings
+    if wantCounts then   -- only Top up needs these
+        if s.foodItem ~= '' then r.food = tonumber(delivery.query(name, string.format('FindItemCount[=%s]', s.foodItem))) end
+        if s.drinkItem ~= '' then r.drink = tonumber(delivery.query(name, string.format('FindItemCount[=%s]', s.drinkItem))) end
+    end
+    return r   -- combat, plus counts when asked
+end
+
+--[[--------------------------------------------------------------------------
+  delivery.probe(name, wantCounts)
+
+  WHAT  : Asks one box whether it can be reached and, if so, its combat
+          state and optionally its food and drink counts.
+          Returns:
+            table  { combat, food, drink }  the box answered
+            false                           the box did not answer
+            nil                             this link cannot ask (EQBC,
+                                            Manual), so nothing is known
+  WHY   : One call that serves the link check, Top up and the busy check.
+  WHERE : init.lua linkCheck and serveMembers, delivery.peerInCombat.
+  HOW   : MQRemote: askMQRemote (always returns counts).
+          DanNet:   askDanNet.
+          Others:   nil.
+  WHEN  : Before summoning (link check) and before each trade attempt.
+----------------------------------------------------------------------------]]
+function delivery.probe(name, wantCounts)
+    local method = core.settings.acceptMethod
+    local r
+    if method == 'mqremote' then   -- MQRemote: round trip question
+        r = askMQRemote(name)   -- always returns counts
+    elseif method == 'dannet' then   -- DanNet: direct queries
+        r = askDanNet(name, wantCounts)   -- counts only when wantCounts
+    else
+        return nil   -- EQBC and Manual cannot ask
+    end
+    if r == nil then return false end   -- asked, but no answer
+    return r
 end
 
 --[[--------------------------------------------------------------------------
   delivery.peerInCombat(name)
 
   WHAT  : Asks another box whether it is in combat. Returns true, false, or
-          nil when it could not be asked.
+          nil when it could not be asked or did not answer.
   WHY   : A box that is fighting will not open a trade window. Asking first
           avoids a pointless trade attempt and its timeout.
-  WHERE : init.lua trade queue.
-  HOW   : delivery.query on Me.CombatState; COMBAT means fighting.
+  WHERE : init.lua serveMembers.
+  HOW   : delivery.probe without counts; COMBAT means fighting.
   WHEN  : Right before each trade attempt.
 ----------------------------------------------------------------------------]]
 function delivery.peerInCombat(name)
-    local state = delivery.query(name, 'Me.CombatState', 1500)
-    if state == nil then return nil end   -- no DanNet or no reply
-    return state == 'COMBAT'
+    local r = delivery.probe(name, false)
+    if not r then return nil end   -- could not ask, or no answer
+    return r.combat == 'COMBAT'
 end
 
 --[[==========================================================================
@@ -471,21 +801,14 @@ end
   WHAT  : Tells the receiving box to press its Trade button.
   WHY   : Both sides must accept; this makes the hand out unattended.
   WHERE : runOneTrade.
-  HOW   : DanNet /dex or EQBC /bct, depending on acceptMethod. 'none' sends
+  HOW   : delivery.remote with the TradeWnd Trade button command, so the
+          chosen link (MQRemote, DanNet or EQBC) carries it. Manual sends
           nothing and leaves it to the operator or another automation.
   WHEN  : After the caster presses Trade, then every two seconds until the
           trade closes, in case the first command arrived too early.
 ----------------------------------------------------------------------------]]
 local function remoteAccept(name)
-    local method = core.settings.acceptMethod
-    if method == 'dannet' then
-        -- /dex <peer> <command> runs the command on that client.
-        core.cmd('/dex %s /notify TradeWnd TRDW_Trade_Button leftmouseup', name:lower())
-    elseif method == 'eqbc' then
-        -- /bct <name> //<command>; the double slash is required.
-        core.cmd('/bct %s //notify TradeWnd TRDW_Trade_Button leftmouseup', name)
-    end
-    -- 'none': intentionally nothing.
+    delivery.remote(name, '/notify TradeWnd TRDW_Trade_Button leftmouseup')   -- the receiver presses Trade
 end
 
 --[[--------------------------------------------------------------------------
@@ -677,16 +1000,23 @@ return delivery   -- hand the module table to require('provisions.delivery')
     clearCursor(ms)          bool    /autoinventory until empty.
     locate(name)             table   First stack location, or nil.
     pickUp(name, n)          number  Lift up to n onto the cursor.
+    linkName()               string  "MQRemote", "DanNet", "EQBC", "Manual".
+    linkReady()              bool, msg  Link plugin loaded on the caster.
+    ensureLink()             bool, msg  Load the link plugin here if needed.
+    loadOnOthers(names)      string  Load it on silent boxes via another link.
+    remote(name, cmd)                Run a command on another box.
+    onPong(token, name, ...)         Store an MQRemote answer.
     query(name, q, ms)       string  DanNet query answer, or nil.
-    queryCount(name, item)   number  DanNet item count, or nil.
-    peerInCombat(name)       bool    DanNet combat state, or nil.
+    probe(name, counts)      table | false | nil   Reach and ask a box.
+    peerInCombat(name)       bool    Combat state, or nil if unknown.
     cancel()                         Cancel a trade, clear the cursor.
     moveInRange(row)         bool    Walk into trade range.
     giveItems(row, items)    table, reason   One trade attempt.
 
   DEPENDENCIES : mq, provisions.core.
-                 Optional plugins: MQ2DanNet (accept, Top up, busy check),
-                 MQ2EQBC (accept), MQ2Nav (walking).
+                 Link plugins (one of): MQRemote (default; accept, link
+                 check, Top up, busy check), MQ2DanNet (the same), MQ2EQBC
+                 (accept only). Optional: MQ2Nav (walking).
 
   HOW TO EDIT SAFELY
     - Partial stack pickups failing: turn on Debug trace and check the
@@ -694,8 +1024,12 @@ return delivery   -- hand the module table to require('provisions.delivery')
       /windows in game.
     - Only general inventory is touched. Raise LAST_GENERAL_SLOT if a
       future client adds slots.
-    - Add an accept method: a branch in remoteAccept and a radio button in
-      ui.lua drawOptions.
+    - Add a link method: an entry in LINKS, a branch in delivery.remote,
+      a branch in delivery.probe if it can answer questions, and a radio
+      button in ui.lua drawOptions.
+    - The pong reply format is "/prov pong <token> <name> <combat> <food>
+      <drink>". If you add a field, change askMQRemote, delivery.onPong
+      and init.lua onCommand together.
     - Delivery is verified by recounting the caster's bags. Never let the
       caster receive items in the same trade or the count will be wrong.
     - New trade reasons must also be handled in init.lua serveMembers.

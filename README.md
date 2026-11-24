@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/README.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.0.0
+  VERSION : 2.2.0
   WHAT    : Install, use and troubleshooting guide for the package.
   WHY     : So the package can be set up and tuned without reading the code.
   WHERE   : Lives beside init.lua in <MacroQuest>/lua/provisions/.
@@ -44,7 +44,7 @@ The finished layout:
     init.lua       entry point, job runner, Pause and Combat Hold, /prov
     core.lua       chat output, settings, group roster, shared job flags
     casting.lua    spell detection and the summon loop (MQ2Cast)
-    delivery.lua   bag handling, trading, DanNet queries
+    delivery.lua   bag handling, trading, link to other boxes
     ui.lua         the window
     README.md   ARCHITECTURE.md   CHANGELOG.md   LICENSE   .gitignore
     dev/doc_audit.py   dev/smoke_test.py      (PC tools, not used in game)
@@ -65,8 +65,9 @@ matters.
 
 | Plugin | Needed for | Required |
 |---|---|---|
-| MQ2DanNet | Receiving box presses Trade, Top up counts, busy member check | Recommended |
-| MQ2EQBC | Alternative to DanNet for accepting | Optional |
+| MQRemote | Default link: receiving box presses Trade, link check, Top up counts, busy member check. Load on every character. | Recommended |
+| MQ2DanNet | Alternative link with the same features | Optional |
+| MQ2EQBC | Alternative link, pressing Trade only | Optional |
 | MQ2Cast | Casting with automatic fizzle and interrupt retries | Recommended |
 | MQ2Nav | Walking into trade range | Optional |
 | RGMercs | Paused during the hand out, handed back during a fight | Optional |
@@ -76,6 +77,45 @@ recasts on fizzles and interrupts and reports the reason in `Cast.Result`.
 If MQ2Cast is not loaded the script loads it for the job and unloads it
 after. If it cannot be loaded, or the option is turned off, plain `/cast`
 is used.
+
+### Link to other boxes (MQRemote)
+
+Only the caster runs Provisions. The other characters only need MQRemote
+loaded.
+
+Provisions loads it for you where it can:
+
+- On the caster: when you pick MQRemote under Options, when the script
+  starts, and before every hand out or link check.
+- On the other characters: if one does not answer and DanNet (or EQBC) is
+  loaded on the caster, Provisions sends `/plugin MQRemote load` to that
+  character through it, waits 4 seconds and asks again.
+
+`/plugin MQRemote load` also tells MacroQuest to load it by itself next
+session. If a character has no other link either, type this once there:
+
+```
+/plugin MQRemote load
+```
+
+Provisions sends commands with `/rc server <Name> <command>`. MQRemote can
+send commands but cannot read values back, so to ask a box a question the
+caster sends a command that makes that box send `/prov pong ...` back,
+with its own combat state and item counts filled in.
+
+Before every hand out Provisions checks the link:
+
+- If MQRemote is not loaded on the caster it is loaded. If that fails, it
+  stops before casting and tells you what to type.
+- Every ticked member must answer. Anyone who does not is left out, shown
+  in red as "no MQRemote", and named in chat.
+
+Press Check links (or type `/prov check`) to run the same check without
+summoning anything. Each member shows what it carries.
+
+DanNet still works: pick DanNet under Options. The check then also looks
+at the DanNet peer list. If a VPN is running, DanNet may pick the VPN
+network; `/dnet interface` shows which one it uses.
 
 ## Run
 
@@ -90,7 +130,7 @@ is used.
 The caster memorises the summon spells into the borrowed gem if needed,
 casts until it carries enough for everyone, then walks to and trades each
 ticked member in turn. The receiving box is told to press Trade through
-DanNet or EQBC. When finished it restores the borrowed gem and unpauses
+MQRemote (or DanNet or EQBC). When finished it restores the borrowed gem and unpauses
 RGMercs.
 
 ### Pause
@@ -118,7 +158,8 @@ RGMercs paused.
 ### Busy members
 
 A member who is fighting will not open a trade window. Before each trade
-Provisions asks the member through DanNet whether it is in combat. A member
+Provisions asks the member through MQRemote (or DanNet) whether it is in
+combat. A member
 who is in combat, or whose trade does not open or is not accepted, goes to
 the back of the line and is tried again after 10 seconds. After 3 tries
 that member is given up on, shown in red as "busy, gave up" and listed in
@@ -134,12 +175,14 @@ chat. Press Hand Out again later to serve them.
 | `/prov resume` | Carry on after a pause |
 | `/prov stop` | Stop a running hand out |
 | `/prov all` | Tick every eligible member |
+| `/prov check` | Check the link to every ticked member, without summoning |
 | `/prov food N` | Set food per member |
 | `/prov drink N` | Set drink per member |
 | `/prov quit` | Save and end |
 | `/prov help` | List the commands |
 
-`/prov go` can be sent from another box: `/dex castername /prov go`.
+`/prov go` can be sent from another box: `/rc server Castername /prov go`.
+`/prov pong` is used internally for answers from other boxes.
 
 ## Spells used
 
@@ -163,8 +206,8 @@ cursor after the first cast.
 
 | Option | Default | Meaning |
 |---|---|---|
-| Receiver accepts via | DanNet | How the other box presses Trade. Manual means you or another script accepts. |
-| Top up only | Off | Ask each box its current count with DanNet and give only the shortfall. |
+| Talk to other boxes via | MQRemote | MQRemote, DanNet, EQBC or Manual. EQBC can only press Trade. Manual means you or another script accepts. A choice saved by an older version is kept. |
+| Top up only | Off | Ask each box its current count (MQRemote or DanNet) and give only the shortfall. |
 | Keep my existing stock | On | Never hand out food already in your bags. |
 | Pause RGMercs | On | `/rgl pause` during the job, only if RGMercs is running. |
 | Walk with MQ2Nav | On | Walk into range when a member is too far. |
@@ -195,10 +238,14 @@ Turn on Debug trace in Options. Every command sent is echoed in chat.
 |---|---|
 | Partial counts lift the whole stack | QuantityWnd control names differ on your client. Check `QTYW_slider` and `QTYW_Accept_Button` with `/windows`. |
 | Item stays on cursor at the target | Out of range or line of sight, or the member is fighting. It will be tried again. |
-| Trade times out | Receiver is not on DanNet under that name, or a different accept method is needed. |
-| A member always shows "busy, gave up" | DanNet reports them in combat, or their client never accepts. Check `/dquery name -q Me.CombatState`. |
+| "MQRemote could not be loaded" | Type `/plugin MQRemote load` on the caster and read the MacroQuest message. The plugin file may be missing from your MacroQuest build. |
+| A member shows "no MQRemote" | MQRemote is not loaded on that character and could not be loaded through DanNet, or the character is on another server. Type `/plugin MQRemote load` there, then press Check links. |
+| Quick manual link test | On the caster type `/rc server Name /sit`. The other character should sit. |
+| A member shows "no DanNet" | That character is missing from `${DanNet.Peers}`. Check `/dnet interface` on both; a VPN can move DanNet to the wrong network. |
+| Trade times out | The receiver did not get the accept command. Press Check links. |
+| A member always shows "busy, gave up" | The link reports them in combat, or their client never accepts. |
 | Job sits on "Combat hold" | You are still in combat or have mobs on your extended target window. |
-| Top up gives full amount | The box did not answer the DanNet query in 2 seconds, so the full count is used. |
+| Top up gives full amount | The box did not report its counts, so the full count is used. Press Check links. |
 | Summoning is slow and fizzles a lot | Low Conjuration skill. It will still finish; each fizzle also gives a chance to raise the skill. Watch the progress line. |
 | Summoning stops with a reason in red | MQ2Cast reported something retries cannot fix, such as stunned or missing component. |
 | "No free bag slot" | Bags full with no partial stack to grow. |

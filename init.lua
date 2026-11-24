@@ -1,8 +1,25 @@
 --[[==========================================================================
   FILE        : provisions/init.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  Merges the ClericFood 1.3.2 files init.lua and
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  The link plugin is now loaded automatically. tick
+                       handles the new linkLoadRequested flag (set when a
+                       link is picked in Options, and once at startup) with
+                       loadLinkNow. linkCheck loads the plugin on the caster
+                       when it is missing, and for members who do not answer
+                       it sends /plugin <name> load through another link
+                       (DanNet or EQBC) when one is up, waits, and asks
+                       them once more.
+                2.1.0  Adds linkCheck, run at the start of every hand out:
+                       it stops with a clear message when the link plugin
+                       (MQRemote by default) is missing on the caster, and
+                       leaves out any member who does not answer, naming
+                       them and what to type. Adds checkOnly for the new
+                       Check links button and /prov check, and the
+                       internal /prov pong command that receives answers
+                       from other boxes. Top up now uses the counts the
+                       link check collected.
+                2.0.0  Merges the ClericFood 1.3.2 files init.lua and
                        actions.lua. Renamed to Provisions; the command is now
                        /prov. Adds the checkpoint that holds the job for
                        Pause and Combat Hold (RGMercs is handed back during a
@@ -48,11 +65,14 @@
     - "Busy" means a member could not be traded right now (fighting, out of
       range, did not accept). Busy members go to the back of the queue and
       are tried again after busyRetrySec, up to busyTries times.
+    - "Link" is how commands reach the other boxes: MQRemote (default),
+      DanNet, EQBC or Manual. linkCheck runs before any summoning; members
+      who do not answer get "no MQRemote" (or "no DanNet") in the window.
 ==========================================================================]]--
 
 local mq       = require('mq')                    -- TLO, delay, bind, imgui
 local core     = require('provisions.core')       -- helpers, settings, roster, job
-local delivery = require('provisions.delivery')   -- bag counts, trades, DanNet
+local delivery = require('provisions.delivery')   -- bag counts, trades, link to other boxes
 local casting  = require('provisions.casting')    -- spell detection and summoning
 local ui       = require('provisions.ui')         -- the window
 
@@ -175,6 +195,173 @@ local function checkpoint()
     return not core.aborted(), heldMs   -- carry on flag and held time
 end
 
+--- Remote load wait -----------------------------------------------------------------
+-- WHAT : How long to wait after sending /plugin <name> load to other boxes
+--        before asking them again, in milliseconds.
+-- WHY  : The plugin needs a moment to start on the other box. Too short
+--        and a box that would have answered is left out.
+-- WHERE: linkCheck.
+-- HOW  : Constant. 4 seconds covers a normal plugin load with room spare.
+-- WHEN : Only when a member did not answer the first question.
+local LOAD_WAIT_MS = 4000
+
+--[[--------------------------------------------------------------------------
+  loadLinkNow()
+
+  WHAT  : Loads the plugin for the chosen link on the caster if it is not
+          loaded, and says the result on the status line.
+  WHY   : Picking MQRemote in Options should make MQRemote work at once,
+          without the operator typing /plugin. The window may not wait, so
+          it only sets a flag and this function does the waiting.
+  WHERE : tick, when core.job.linkLoadRequested is set (ui.lua drawOptions
+          on a link pick, and startup).
+  HOW   : delivery.ensureLink. Silent when the plugin was already loaded.
+          On failure the message goes to chat in red.
+  WHEN  : Right after a link is picked, and once after startup.
+----------------------------------------------------------------------------]]
+local function loadLinkNow()
+    local link = delivery.linkName()
+    if link == 'Manual' then return end   -- nothing to load
+    local wasUp = delivery.linkReady()   -- true when nothing needs doing
+    local ok, msg = delivery.ensureLink()
+    -- ensureLink already said what happened in chat, so only the window's
+    -- status line is set here (setStatus would echo the same news twice).
+    if not ok then
+        core.err(msg)
+        core.job.status = string.format('%s is not loaded here, see chat.', link)
+    elseif not wasUp then   -- we just loaded it
+        core.job.status = string.format('%s loaded. Press Check links to test the other boxes.', link)
+    end
+end
+
+--[[--------------------------------------------------------------------------
+  linkCheck(rows, wantCounts)
+
+  WHAT  : Confirms the link plugin is loaded on the caster and that every
+          ticked member answers over it. Returns the rows that can be
+          served (the caster's own row always stays), or nil when the
+          caster itself is missing the plugin.
+  WHY   : The first live test failed because the receiver never got the
+          accept command, and the only sign was three timeouts per member
+          after all the summoning was done. Checking first names the
+          problem in plain words before any mana is spent.
+  WHERE : run (before summoning) and checkOnly (/prov check, Check links).
+  HOW   : 1. delivery.ensureLink: loads the plugin here when it is
+             missing; if that fails print its message and return nil.
+          2. Clear any old row.probe values.
+          3. MQRemote and DanNet: delivery.probe each member. An answer is
+             stored in row.probe (Top up reads it).
+          4. Members who did not answer: delivery.loadOnOthers sends them
+             /plugin <name> load through another link when one is up here.
+             After LOAD_WAIT_MS they are asked once more.
+          5. Still no answer: the member is dropped, gets a red
+             "no <link>" result, and is listed in one warning that says
+             what to type on that character.
+          6. EQBC and Manual cannot ask, so every row is kept unchecked.
+  WHEN  : At the start of every job, and on request.
+----------------------------------------------------------------------------]]
+local function linkCheck(rows, wantCounts)
+    local s, link = core.settings, delivery.linkName()
+    local ok, msg = delivery.ensureLink()   -- loads the plugin here if needed
+    if not ok then core.err(msg) return nil end   -- caster side problem: stop here
+
+    for _, row in ipairs(rows) do row.probe = nil end   -- forget answers from an earlier job
+    if s.acceptMethod ~= 'mqremote' and s.acceptMethod ~= 'dannet' then
+        return rows   -- EQBC and Manual cannot ask; keep everyone
+    end
+
+    -- First round: ask every ticked member.
+    local keep, silent = {}, {}
+    for _, row in ipairs(rows) do   -- ask each ticked row in turn
+        if row.isSelf then   -- the caster itself
+            keep[#keep + 1] = row   -- the caster needs no link to itself
+        else
+            setStatus('Checking %s link to %s.', link, row.name)
+            local r = delivery.probe(row.name, wantCounts)
+            if r then   -- the box answered
+                row.probe = r   -- Top up and the window read this
+                keep[#keep + 1] = row
+            else
+                silent[#silent + 1] = row   -- try loading the plugin there
+            end
+        end
+    end
+
+    -- Second round: load the plugin on the silent boxes through another
+    -- link if one is up here, then ask them once more.
+    local via = nil   -- name of the link the load went through, if any
+    if #silent > 0 then
+        local names = {}
+        for _, row in ipairs(silent) do names[#names + 1] = row.name end
+        via = delivery.loadOnOthers(names)   -- nil when no other link is up here
+        if via then   -- a load command went out
+            setStatus('Loading %s on %s through %s.', link, table.concat(names, ', '), via)
+            core.delay(LOAD_WAIT_MS)   -- give the plugin time to start there
+        end
+    end
+    local missing = {}
+    for _, row in ipairs(silent) do   -- ask again, or give up straight away
+        local r = false   -- no load was sent: asking again would only wait
+        if via and not core.aborted() then r = delivery.probe(row.name, wantCounts) end
+        if r then   -- it answers now
+            row.probe = r
+            keep[#keep + 1] = row
+            core.good('%s now answers over %s.', row.name, link)
+        else
+            missing[#missing + 1] = row.name   -- named in the warning below
+            core.job.results[row.name] = { food = 0, drink = 0, note = 'no ' .. link }   -- red in the window
+        end
+    end
+    if #missing > 0 then   -- someone did not answer
+        core.warn('No %s answer from: %s. On each of them type /plugin %s load, and make sure they are on the same server.',   -- one yellow line naming them all
+            link, table.concat(missing, ', '), link == 'DanNet' and 'MQ2DanNet' or link)   -- MQ2DanNet is the plugin name for DanNet
+        if link == 'DanNet' then   -- the VPN problem from the first live test
+            core.warn('DanNet tip: /dnet interface on each character must point at the same network.')
+        end
+    end
+    return keep   -- rows that can be served
+end
+
+--[[--------------------------------------------------------------------------
+  checkOnly()
+
+  WHAT  : Runs the link check on its own and reports, without summoning or
+          trading anything.
+  WHY   : Lets the operator test MQRemote (or DanNet) on every box before
+          a real hand out, for example after logging in.
+  WHERE : tick, when core.job.checkRequested is set by the Check links
+          button or /prov check.
+  HOW   : Refresh the roster, take the ticked rows, linkCheck with counts,
+          then show what each box carries in the Last result column and
+          a summary on the status line.
+  WHEN  : On request, only while no hand out is running.
+----------------------------------------------------------------------------]]
+local function checkOnly()
+    core.job.results = {}   -- clear the window's result column
+    core.refreshRoster(true)
+    local rows = core.selectedRows()
+    local others = 0   -- ticked members other than the caster
+    for _, row in ipairs(rows) do if not row.isSelf then others = others + 1 end end
+    if others == 0 then setStatus('Tick at least one other member to check.') return end
+
+    local keep = linkCheck(rows, true)   -- with counts, for the window
+    if not keep then setStatus('%s is not loaded here, see chat.', delivery.linkName()) return end   -- caster lacks the plugin
+    local answered = 0   -- members who answered
+    for _, row in ipairs(keep) do   -- every row kept by the check
+        if row.probe then   -- only rows that were actually asked
+            answered = answered + 1
+            core.job.results[row.name] = { food = row.probe.food or 0, drink = row.probe.drink or 0,
+                note = 'carries, link ok' }   -- green in the window
+            core.good('%s answered over %s (%s).', row.name, delivery.linkName(), tostring(row.probe.combat))
+        end
+    end
+    if core.settings.acceptMethod == 'mqremote' or core.settings.acceptMethod == 'dannet' then   -- links that can answer questions
+        setStatus('Link check: %d of %d answered over %s.', answered, others, delivery.linkName())   -- summary on the status line
+    else
+        setStatus('%s cannot check other boxes. Plugin loaded here: yes.', delivery.linkName())   -- EQBC or Manual: nothing to ask
+    end
+end
+
 --[[--------------------------------------------------------------------------
   planNeeds(rows)
 
@@ -184,7 +371,8 @@ end
           changes the per member numbers.
   WHERE : run.
   HOW   : Other members: full counts, or in Top up mode the shortfall
-          reported by DanNet (full counts if no answer). The caster's own
+          from the counts linkCheck stored in row.probe (full counts when
+          the box could not say). The caster's own
           row, when ticked: an extra set, or in Top up mode the shortfall.
           Carry target = handed out + own share + existing stock when
           preserveOwnStock is on.
@@ -209,9 +397,8 @@ local function planNeeds(rows)
             end
             plan.selfFood, plan.selfDrink = food, drink
         else
-            if s.topUp then   -- ask the box what it carries
-                local hf = delivery.queryCount(row.name, s.foodItem)    -- nil if no answer
-                local hd = delivery.queryCount(row.name, s.drinkItem)
+            if s.topUp and row.probe then   -- the link check already asked what it carries
+                local hf, hd = row.probe.food, row.probe.drink   -- nil when unknown
                 if hf then food  = math.max(0, food - hf) end
                 if hd then drink = math.max(0, drink - hd) end
             end
@@ -244,8 +431,8 @@ end
             2. Take the first entry whose notBefore has passed; if none is
                ready, wait 500 ms.
             3. Work out what can be spared without touching the reserve.
-            4. If DanNet answers that the member is in combat, count it as
-               busy without trying.
+            4. If the link (MQRemote or DanNet) answers that the member is
+               in combat, count it as busy without trying.
             5. Otherwise delivery.giveItems. Reasons:
                  ok      record and report
                  combat  the caster was attacked: back of the queue at no
@@ -292,7 +479,7 @@ local function serveMembers(plan)
             if #items == 0 then   -- nothing to give this member
                 results[m.row.name] = { food = 0, drink = 0, note = 'already stocked' }   -- green note in the window
                 reason = 'done'   -- finished, no retry needed
-            elseif delivery.peerInCombat(m.row.name) == true then   -- DanNet says the member is fighting
+            elseif delivery.peerInCombat(m.row.name) == true then   -- the link says the member is fighting
                 core.warn('%s is in combat, will try again later.', m.row.name)  -- step 4
                 reason = 'busy'
             else
@@ -362,7 +549,9 @@ end
   WHAT  : One complete hand out.
   WHY   : The readable top to bottom sequence of the whole feature.
   WHERE : tick only.
-  HOW   : 1. Detect spells, refresh the roster, collect ticked rows.
+  HOW   : 1. Detect spells, refresh the roster, collect ticked rows, then
+             linkCheck: stop if the link plugin is missing here, leave out
+             members who do not answer, stop if nobody else is left.
           2. Pause RGMercs if wanted and running; prepare casting.
           3. Plan needs.
           4. Summon food, then drink, up to the carry targets.
@@ -382,6 +571,19 @@ local function run()
     end
     if s.foodCount == 0 and s.drinkCount == 0 then   -- both counts zero means nothing to do
         setStatus('Food and drink counts are both zero.')   -- tell the operator instead of doing nothing
+        return
+    end
+
+    -- Step 1b: make sure every ticked member can be reached before any
+    -- mana is spent. Members who do not answer are left out of this job.
+    local hadOthers = false   -- were any members other than the caster ticked?
+    for _, row in ipairs(rows) do if not row.isSelf then hadOthers = true end end
+    rows = linkCheck(rows, s.topUp)
+    if not rows then setStatus('%s is not loaded here, see chat.', delivery.linkName()) return end
+    local othersLeft = false   -- anyone other than the caster still in the job?
+    for _, row in ipairs(rows) do if not row.isSelf then othersLeft = true end end
+    if hadOthers and not othersLeft then   -- nobody else answered
+        setStatus('Nobody answered over %s, see chat.', delivery.linkName())
         return
     end
 
@@ -429,12 +631,29 @@ end
   WHAT  : Starts a requested job and guarantees cleanup afterwards.
   WHY   : The bridge between the non blocking window and the waiting job.
   WHERE : Main loop.
-  HOW   : If requested: reset flags and state, run inside pcall, report any
-          error, always cleanup, count the completed job.
+  HOW   : A link load request (Options pick or startup) runs loadLinkNow
+          inside pcall first, then the rest of the pass carries on.
+          A link check request runs checkOnly inside pcall and returns.
+          A hand out request resets flags and state, runs inside pcall,
+          reports any error, always cleans up and counts the completed job.
   WHEN  : Every main loop pass; returns at once when nothing is requested.
 ----------------------------------------------------------------------------]]
 local function tick()
     local job = core.job
+    if job.linkLoadRequested and not job.running then   -- a link was picked, or startup
+        job.linkLoadRequested, job.running = false, true   -- running locks the window
+        local ok, err = pcall(loadLinkNow)
+        if not ok then core.err('Loading the link failed: %s', tostring(err)) end
+        job.running = false
+    end
+    if job.checkRequested and not job.requested then   -- Check links, no hand out queued
+        job.checkRequested, job.running = false, true   -- running locks the window
+        local ok, err = pcall(checkOnly)   -- a check never changes game state
+        if not ok then core.err('Link check failed: %s', tostring(err)) end
+        job.running = false
+        return
+    end
+    job.checkRequested = false   -- a hand out runs its own check anyway
     if not job.requested then return end   -- the common case
     job.requested, job.running, job.stopRequested = false, true, false
     job.paused, job.hold = false, ''
@@ -466,6 +685,7 @@ local function printHelp()
     core.echo('/prov pause    hold at the next safe point')   -- Pause button equivalent
     core.echo('/prov resume   carry on after a pause')   -- Resume button equivalent
     core.echo('/prov all      tick every eligible group member')   -- Select all button equivalent
+    core.echo('/prov check    test the link to every ticked member')   -- Check links button equivalent
     core.echo('/prov food N   set food per member')   -- sets Food each
     core.echo('/prov drink N  set drink per member')   -- sets Drink each
     core.echo('/prov quit     save and end the script')   -- clean exit that saves settings
@@ -475,8 +695,9 @@ end
   onCommand(...)
 
   WHAT  : Handler for /prov.
-  WHY   : Lets the operator, a hotkey, or another box (through /dex) work
-          the package without the window.
+  WHY   : Lets the operator, a hotkey, or another box (through /rc or
+          /dex) work the package without the window. Also receives the
+          "/prov pong" answers other boxes send back during link checks.
   WHERE : Bound with mq.bind in startup.
   HOW   : First word picks the action. Never waits; go only requests a job.
           Pause and resume work while a job holds, because the hold loop
@@ -507,6 +728,11 @@ local function onCommand(...)
         s[sub .. 'Count'] = n             -- foodCount or drinkCount
         core.save()
         core.echo('%s per member set to %d.', sub, n)
+    elseif sub == 'check' then   -- same as the Check links button
+        core.requestCheck()
+    elseif sub == 'pong' then   -- an answer another box sent back over MQRemote
+        -- /prov pong <token> <name> <combat> <food> <drink>; silent on purpose.
+        delivery.onPong(args[2], args[3], args[4], args[5], args[6])
     elseif sub == 'quit' then
         core.stop()                       -- wind down a running job first
         running = false                   -- loop exits on the next pass
@@ -522,7 +748,9 @@ end
   WHY   : Settings must exist before the window draws, and the spell lines
           need detection once.
   WHERE : Called once below, before the main loop.
-  HOW   : core.load, class note, detect, roster, checkpoint, bind, window.
+  HOW   : core.load, class note, detect, roster, checkpoint, a link load
+          request (the main loop loads the plugin, since startup should not
+          wait), bind, window.
   WHEN  : Script start.
 ----------------------------------------------------------------------------]]
 local function startup()
@@ -532,6 +760,7 @@ local function startup()
     casting.detect()
     core.refreshRoster(true)
     core.bindCheckpoint(checkpoint)          -- Pause and Combat Hold logic
+    core.requestLinkLoad()                   -- load MQRemote now if it is missing
     mq.bind('/prov', onCommand)
     mq.imgui.init('provisions', ui.render)
     core.good('Loaded. Type /prov help for commands.')
@@ -567,10 +796,11 @@ core.echo('Ended.')   -- last line before the script ends
   END OF FILE : provisions/init.lua
 
   STARTUP   : /lua run provisions
-  COMMANDS  : /prov, go, stop, pause, resume, all, food N, drink N, quit,
-              help
+  COMMANDS  : /prov, go, stop, pause, resume, all, check, food N, drink N,
+              quit, help. "pong" is internal: other boxes send it back.
 
   DEPENDENCIES : mq, provisions.core, delivery, casting, ui.
+                 Link plugin: MQRemote by default (see delivery.lua).
                  Optional: RGMercs (/rgl pause and /rgl unpause).
 
   HOW TO EDIT SAFELY

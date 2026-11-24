@@ -1,7 +1,7 @@
 <!--
   FILE    : provisions/ARCHITECTURE.md
   PACKAGE : Provisions Lua (MacroQuest / EverQuest)
-  VERSION : 2.0.0
+  VERSION : 2.2.0
   WHAT    : Maintainer's map of the package: what each file does, how a job
             flows through them, how Stop, Pause and Combat Hold work, where
             every setting is used, and recipes for common changes.
@@ -35,7 +35,7 @@ If you only read one section, read this:
 | `init.lua` | Startup, `/prov`, main loop, job runner, checkpoint, trade queue, cleanup | all files |
 | `ui.lua` | ImGui window, never waits | core, delivery, casting |
 | `casting.lua` | Detect, memorise, cast, summon loop, MQ2Cast | core, delivery |
-| `delivery.lua` | Bag counts, cursor, pickup, walk, trade, remote accept, DanNet queries | core |
+| `delivery.lua` | Bag counts, cursor, pickup, walk, trade, link to other boxes (MQRemote, DanNet, EQBC) | core |
 | `core.lua` | Echo, cmd, abortable delay, settings, roster, job flags, combat check | nothing |
 | `dev/doc_audit.py` | Checks the documentation standard (PC only) | Python |
 | `dev/smoke_test.py` | Runs the code against a fake MacroQuest (PC only) | Python, lupa |
@@ -67,9 +67,13 @@ main loop (init.lua)
       casting.detect()                  best food and drink spell
       core.refreshRoster(true)          live roster
       core.selectedRows()               ticked, in zone, not merc
+      linkCheck()                       link plugin here? every member answers?
+        delivery.ensureLink()           Plugin TLO; /plugin <name> load if missing
+        delivery.loadOnOthers()         silent members: /plugin load via DanNet or EQBC
+        delivery.probe()                MQRemote pong round trip, or DanNet peers + /dquery
       /rgl pause                        if RGMercs is running
       casting.beginJob()                fizzle events on, load MQ2Cast if needed
-      planNeeds()                       per member counts, Top up queries
+      planNeeds()                       per member counts, Top up from row.probe
       casting.summonUntil('food', n)    loop until n carried, fizzles ignored
         core.checkpoint()               Pause and Combat Hold wait here
         casting.castOnce()
@@ -80,14 +84,14 @@ main loop (init.lua)
       casting.summonUntil('drink', n)
       serveMembers(plan)                retry queue
         core.checkpoint()
-        delivery.peerInCombat()         DanNet Me.CombatState
+        delivery.peerInCombat()         probe: Me.CombatState
         delivery.giveItems()
           delivery.moveInRange()        /nav id
           buildPlan()                   split into stacks of 20
           runOneTrade()                 up to 8 stacks
             delivery.pickUp()           shift, ctrl or quantity slider
             /click left target
-            press Trade, waitForAccept()  /dex or /bct, cancels on combat
+            press Trade, waitForAccept()  delivery.remote: /rc, /dex or /bct; cancels on combat
             verify by recounting bags
     cleanup()
       delivery.cancel()
@@ -149,12 +153,48 @@ passed, and tries it.
 |---|---|---|
 | `ok` | delivery.giveItems | Recorded and reported. |
 | `combat` | delivery (caster attacked) | Back of the queue, no try used. The next checkpoint holds. |
-| `busy` | DanNet says fighting, or trade not opened or not accepted | Try +1, back of the queue for `busyRetrySec`. |
+| `busy` | The link says fighting, or trade not opened or not accepted | Try +1, back of the queue for `busyRetrySec`. |
 | `range` | Could not walk into range | Same as busy. |
 | `failed` | Caster side problem (target, pickup) | Same as busy. |
 
 After `busyTries` tries the member is given up on, noted as "busy, gave
 up" and listed in chat at the end.
+
+## How the link to other boxes works
+
+The link is chosen with `acceptMethod`: `mqremote` (default), `dannet`,
+`eqbc` or `none` (Manual).
+
+MQRemote sends commands with `/rc server <Name> <command>` (the
+[MQRemote docs](https://www.redguides.com/docs/projects/mqremote/)). It has
+no documented way to read a value from another box, so a question is a
+round trip:
+
+```
+caster:  /noparse /rc server Tank /rc server Cleric /prov pong 7
+             ${Me.CleanName} ${Me.CombatState} ${FindItemCount[=bread]} ${FindItemCount[=water]}
+Tank:    receives "/rc server Cleric /prov pong 7 ${...}", fills in its own
+         values, sends it on
+caster:  /prov pong 7 Tank ACTIVE 5 3   ->  delivery.onPong stores it
+```
+
+`/noparse` stops the caster filling in the `${}` values itself; the MQRemote
+docs show this pattern for having the receiving client parse them. The
+number (7 here) is a token, so a late answer to an older question is never
+taken for the current one. Only the caster runs Provisions; the others need
+only the MQRemote plugin.
+
+`linkCheck` in `init.lua` runs this before any summoning. First
+`delivery.ensureLink` loads the plugin on the caster with
+`/plugin <name> load` if it is missing. Members who do not answer are sent
+the same load command through another link that is up here (DanNet, then
+EQBC) by `delivery.loadOnOthers`, and asked again after `LOAD_WAIT_MS`.
+Members who still do not answer are left out of the job with the note
+"no MQRemote".
+
+Picking a link in Options calls `core.requestLinkLoad`. The window may not
+wait, so this only sets `job.linkLoadRequested`; `tick` then runs
+`loadLinkNow`, which calls `ensureLink`. Startup sets the same flag.
 
 DanNet queries use `/dquery peer -q "query"`, then wait on
 `DanNet(peer).Q(query).Received`. The MQ2Dan
@@ -189,7 +229,7 @@ with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 | `summonTimeoutMin` | casting.summonUntil |
 | `medForMana`, `medTimeoutSec` | casting.waitForMana |
 | `preserveOwnStock`, `topUp` | init.planNeeds |
-| `acceptMethod` | delivery.remoteAccept |
+| `acceptMethod` | delivery.linkReady, ensureLink, loadOnOthers, remote, probe, init.linkCheck, loadLinkNow, ui.drawOptions |
 | `tradeTimeoutSec` | delivery.waitForAccept |
 | `tradeRange`, `useNav`, `navTimeoutSec` | delivery.moveInRange, ui.drawRoster |
 | `pauseRGMercs` | init.run |
@@ -209,7 +249,8 @@ with `mq.event` (patterns in `EVENTS` in `casting.lua`) and shown live.
 | Change the RGMercs commands | `run`, `checkpoint` and `cleanup` in `init.lua` |
 | Change what counts as combat | `core.inCombat` |
 | Add a hold reason | `checkpoint` in `init.lua`, and `core.holdWanted` if long waits should end for it |
-| Add an accept method | `remoteAccept` in `delivery.lua`, radio button in `ui.drawOptions` |
+| Add a link method | `LINKS`, `sendVia` and `delivery.probe` in `delivery.lua` (and the helper order in `loadOnOthers`), radio button in `ui.drawOptions` |
+| Change how long other boxes get to load MQRemote | `LOAD_WAIT_MS` in `init.lua` |
 | Fix partial stack pickup | `delivery.pickUp`, check names with `/windows` |
 | Treat another cast result as hopeless | `FATAL_RESULTS` in `casting.lua` |
 | Treat another cast result as "just cast again" | `RETRYABLE_RESULTS` in `casting.lua` |
@@ -268,6 +309,8 @@ labels. `dev/doc_audit.py` checks all of the Lua rules.
 | Plan | The list of drops for one member |
 | Reserve | Stock the caster keeps and never trades away |
 | Peer | A box on DanNet, addressed by lower case name |
+| Link | How commands reach other boxes: MQRemote, DanNet, EQBC or Manual |
+| Pong | The answer a box sends back over MQRemote: `/prov pong token name combat food drink` |
 
 <!--
   END OF FILE : provisions/ARCHITECTURE.md

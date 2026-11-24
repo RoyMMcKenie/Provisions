@@ -1,8 +1,10 @@
 --[[==========================================================================
   FILE        : provisions/casting.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  Renamed from ClericFood spells.lua. Spell lists now
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  No change in this file.
+                2.1.0  No change in this file.
+                2.0.0  Renamed from ClericFood spells.lua. Spell lists now
                        cover every class that summons food and drink
                        (Cleric, Druid, Shaman, Magician, Beastlord) and add
                        the Magician spells Cornucopia and Everfount. The

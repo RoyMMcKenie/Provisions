@@ -1,8 +1,15 @@
 --[[==========================================================================
   FILE        : provisions/core.lua
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  New file. Merges the ClericFood 1.3.2 files utils.lua,
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  Adds the linkLoadRequested job flag and
+                       core.requestLinkLoad, so picking a link in Options
+                       (and starting the script) loads its plugin.
+                2.1.0  The default link to other boxes (acceptMethod) is
+                       now 'mqremote'. A saved choice is kept. Adds the
+                       checkRequested job flag and core.requestCheck for
+                       the new Check links button and /prov check.
+                2.0.0  New file. Merges the ClericFood 1.3.2 files utils.lua,
                        config.lua and group.lua into one shared foundation,
                        renamed for every food and drink summoning class.
                        Adds the shared job flags (request, stop, pause,
@@ -283,12 +290,14 @@ core.DEFAULTS = {
     -- Keep the caster's existing stock and summon for everyone on top.
     preserveOwnStock = true,
 
-    -- Top up mode: ask each box through DanNet what it carries and give
-    -- only the shortfall.
+    -- Top up mode: ask each box (through MQRemote or DanNet) what it
+    -- carries and give only the shortfall.
     topUp = false,
 
-    -- How the receiving box presses Trade: 'dannet', 'eqbc' or 'none'.
-    acceptMethod    = 'dannet',
+    -- How commands reach the other boxes (press Trade, link check, Top up,
+    -- busy check): 'mqremote' (default), 'dannet', 'eqbc' or 'none'
+    -- (Manual). EQBC can only press Trade; it cannot answer questions.
+    acceptMethod    = 'mqremote',
     -- Seconds to wait for the receiver to accept before cancelling.
     tradeTimeoutSec = 12,
 
@@ -625,6 +634,8 @@ end
 --        status         one line of text for the window
 --        results        member name -> { food, drink, note }
 --        completed      number of jobs finished this session
+--        checkRequested Check links pressed, check not started yet
+--        linkLoadRequested a link was picked (or startup); load its plugin
 -- WHEN : Updated throughout a job.
 core.job = {
     requested     = false,
@@ -635,6 +646,8 @@ core.job = {
     status        = 'Idle',  -- shown next to the buttons
     results       = {},      -- filled per member by init.lua
     completed     = 0,       -- also lets the PC smoke test know a job ended
+    checkRequested = false,  -- Check links pressed; init.lua tick runs it
+    linkLoadRequested = false, -- link picked or startup; init.lua tick loads the plugin
 }
 
 --[[--------------------------------------------------------------------------
@@ -654,6 +667,42 @@ function core.request()
         return
     end
     core.job.requested = true   -- picked up by the main loop's next pass
+end
+
+--[[--------------------------------------------------------------------------
+  core.requestCheck()
+
+  WHAT  : Ask for a link check (no summoning, no trading).
+  WHY   : The check waits for answers from other boxes, which the window
+          and slash commands may not do, so like core.request it only sets
+          a flag.
+  WHERE : ui.lua Check links button and /prov check.
+  HOW   : Ignored while a job or a check runs. init.lua tick picks it up.
+  WHEN  : On operator input.
+----------------------------------------------------------------------------]]
+function core.requestCheck()
+    if core.job.running then
+        core.warn('Busy, try the link check when this finishes.')
+        return
+    end
+    core.job.checkRequested = true   -- picked up by the main loop's next pass
+end
+
+--[[--------------------------------------------------------------------------
+  core.requestLinkLoad()
+
+  WHAT  : Ask for the chosen link plugin to be loaded on this character.
+  WHY   : Loading means waiting for the plugin to start, which the window
+          may not do, so like core.request it only sets a flag.
+  WHERE : ui.lua drawOptions (a link radio button is clicked) and init.lua
+          startup.
+  HOW   : Sets core.job.linkLoadRequested; init.lua tick runs loadLinkNow.
+          No warning while busy: the options are locked during a job, and
+          every job loads the plugin itself anyway.
+  WHEN  : On a link pick and at startup.
+----------------------------------------------------------------------------]]
+function core.requestLinkLoad()
+    core.job.linkLoadRequested = true   -- picked up by the main loop's next pass
 end
 
 -- Stop the running job. Works while paused or holding too.

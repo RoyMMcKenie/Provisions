@@ -2,8 +2,21 @@
 =============================================================================
   FILE        : provisions/dev/smoke_test.py
   PACKAGE     : Provisions Lua  (MacroQuest / EverQuest)
-  VERSION     : 2.0.0
-  CHANGES     : 2.0.0  Renamed for the Provisions package. Now runs the real
+  VERSION     : 2.2.0
+  CHANGES     : 2.2.0  The fake /plugin <name> load command loads a plugin
+                       on the caster (except in nocaster, where loading
+                       fails), and /dex <peer> /plugin MQRemote load gives
+                       that fake box MQRemote (except Wiz in nolink, who
+                       has no DanNet either). Two new scenarios: autoload
+                       and remoteload.
+                2.1.0  Adds a fake MQRemote. "/rc server <Name> ..." reaches
+                       the named fake box unless the scenario says it has no
+                       MQRemote; the box fills in its ${} values and its
+                       "/prov pong" answer is delivered to the real /prov
+                       handler on the next delay. The busy scenario now runs
+                       over MQRemote. Five new scenarios: nocaster, nolink,
+                       topup, dannet and check.
+                2.0.0  Renamed for the Provisions package. Now runs the real
                        init.lua start to finish (startup, main loop, one
                        job, shutdown) instead of calling the job runner
                        directly. Adds fakes for Me.CombatState,
@@ -49,8 +62,25 @@
             combat     a 6 s fight on the 3rd cast, and another when the
                        first trade opens (that trade is cancelled); RGMercs
                        must be handed back and paused again
-            busy       DanNet reports Tank in combat twice, Wiz always;
-                       Tank is served, Wiz is given up after 3 tries
+            busy       MQRemote answers say Tank is in combat twice after
+                       the link check, Wiz always; Tank is served, Wiz is
+                       given up after 3 tries
+            nocaster   MQRemote is not loaded on the caster and cannot be
+                       loaded: the job must stop before casting or pausing
+                       RGMercs
+            autoload   MQRemote is not loaded on the caster; Provisions
+                       loads it with /plugin MQRemote load and serves both
+            nolink     Wiz has no MQRemote and no DanNet: the load through
+                       DanNet goes nowhere, Wiz is left out with the note
+                       "no MQRemote" and only Tank's share is summoned
+            remoteload Wiz has no MQRemote but has DanNet: Provisions
+                       sends /dex wiz /plugin MQRemote load, asks again,
+                       and serves both
+            topup      Top up on; Tank already carries 5 bread and 3 water,
+                       so Tank gets 2 food and no drink
+            dannet     the old DanNet link, peers list includes both
+            check      Check links only (no hand out); Tank carries 5 bread
+                       and 3 water, both boxes answer, nothing is cast
 
   WHEN  : After any change to logic in init, casting, delivery or core.
 
@@ -97,6 +127,9 @@ local G = {
   combat = false, combatUntil = 0,  -- caster fight state and end time
   dq = {},                          -- DanNet replies: peer|query -> { v, t }
   dqCount = {},                     -- peer -> number of combat queries so far
+  rcAsk = {},                       -- box name -> MQRemote questions so far
+  pongs = {},                       -- /prov pong lines waiting for delivery
+  binds = {},                       -- slash command -> Lua handler (mq.bind)
   cmds = {},                        -- every command sent, for inspection
   holds = {},                       -- hold reasons seen during delays
   tradesOpened = 0,                 -- how many trade windows were opened
@@ -144,7 +177,12 @@ TLO.Me = {
   Casting = { ID = val(nil) },
 }
 TLO.Spell = function() return { Mana = val(10) } end
-TLO.Plugin = function(n) return { IsLoaded = val(n == 'MQ2Cast' or n == 'MQ2DanNet') } end
+-- Plugins on the caster. nocaster and autoload start without MQRemote.
+G.loaded = { MQ2Cast = true, MQ2DanNet = true,
+             MQRemote = SCENARIO ~= 'nocaster' and SCENARIO ~= 'autoload' }
+TLO.Plugin = function(n)
+  return { IsLoaded = function() return G.loaded[n] == true end }
+end
 TLO.Cast = { Status = function() return G.castStatus end,
              Result = function() return G.castResult end }
 -- Cursor fields read straight from G.cursor.
@@ -175,23 +213,30 @@ TLO.Spawn = function() return setmetatable({ Distance = val(10) }, { __call = fu
 TLO.Target = { ID = function() return G.target end }
 TLO.Navigation = { Active = val(false), MeshLoaded = val(true) }
 -- DanNet: Q(query) gives the stored reply; Received is 0 until it arrives.
-TLO.DanNet = function(peer) return { Q = function(q)
-  local r = G.dq[peer .. '|' .. q]
-  return setmetatable({ Received = function() return r and r.t or 0 end },
-                      { __call = function() return r and r.v end })
-end } end
+-- DanNet.Peers lists the connected boxes.
+TLO.DanNet = setmetatable({ Peers = val('cleric|tank|wiz|') }, { __call = function(_, peer)
+  return { Q = function(q)
+    local r = G.dq[peer .. '|' .. q]
+    return setmetatable({ Received = function() return r and r.t or 0 end },
+                        { __call = function() return r and r.v end })
+  end }
+end })
 TLO.Lua = { Script = function() return { Status = val('RUNNING') } end }  -- RGMercs running
 TLO.EverQuest = { Server = val('test') }
 -- In game until one job has completed, then at character select.
 TLO.MacroQuest = { GameState = function()
   local c = core()
+  if SCENARIO == 'check' then                                      -- a check never counts as a job
+    return (c and c.job.status:find('^Link check')) and 'CHARSELECT' or 'INGAME'
+  end
   return (c and c.job.completed >= 1) and 'CHARSELECT' or 'INGAME'
 end }
 
 local evs, pending, castN = {}, {}, 0      -- chat events, queued names, /casting calls
 local mq = { TLO = TLO, configDir = CONFIG_DIR,
   gettime = function() now = now + 50 tick() return now end,
-  pickle = function() end, bind = function() end, unbind = function() end,
+  pickle = function() end, unbind = function() end,
+  bind = function(name, fn) G.binds[name] = fn end,   -- keep /prov for pong replies
   imgui = { init = function() end },
   event = function(n, _, cb) evs[n] = cb end,
   unevent = function(n) evs[n] = nil end,
@@ -200,12 +245,45 @@ local mq = { TLO = TLO, configDir = CONFIG_DIR,
     pending = {}
   end,
 }
+-- deliver() runs queued "/prov pong" lines through the real /prov
+-- handler, the way MacroQuest runs incoming commands while a script waits.
+local function deliver()
+  local list = G.pongs; G.pongs = {}
+  for _, line in ipairs(list) do
+    local words = {}
+    for w in line:gmatch('%S+') do words[#words + 1] = w end
+    table.remove(words, 1)                                        -- drop "/prov"
+    G.binds['/prov'](table.unpack(words))
+  end
+end
 -- A delay with a condition moves 10 ms and returns; callers check again.
-function mq.delay(ms, cond) now = now + (cond and 10 or ms) tick() end
+function mq.delay(ms, cond) deliver() now = now + (cond and 10 or ms) tick() end
+
+-- Fake boxes. ids match the group list; nolink takes MQRemote off Wiz.
+local BOX_ID = { Tank = 2, Wiz = 3 }
+G.boxRemote = { Tank = true, Wiz = not (SCENARIO == 'nolink' or SCENARIO == 'remoteload') }
+local function hasRemote(name) return BOX_ID[name] and G.boxRemote[name] end
+-- fill(name, text) does what the other box does with ${} values.
+local function fill(name, text)
+  G.rcAsk[name] = (G.rcAsk[name] or 0) + 1
+  local n = G.rcAsk[name]
+  local state = 'ACTIVE'                                          -- first answer is the link check
+  if SCENARIO == 'busy' and (name == 'Wiz' or n == 2 or n == 3) then state = 'COMBAT' end
+  local got = G.recv[BOX_ID[name]] or {}
+  text = text:gsub('%${Me%.CleanName}', name):gsub('%${Me%.CombatState}', state)
+  text = text:gsub('%${FindItemCount%[=(.-)%]}', function(item) return tostring(got[item] or 0) end)
+  return text
+end
 
 -- mq.cmd imitates the game reacting to each command.
 function mq.cmd(c)
   G.cmds[#G.cmds + 1] = c
+  local plug = c:match('^/plugin (%S+) load$')                    -- load a plugin here
+  if plug and SCENARIO ~= 'nocaster' then G.loaded[plug] = true end
+  local dpeer = c:match('^/dex (%S+) /plugin MQRemote load$')     -- load MQRemote there
+  if dpeer and not (SCENARIO == 'nolink' and dpeer == 'wiz') then
+    G.boxRemote[dpeer:sub(1, 1):upper() .. dpeer:sub(2)] = true
+  end
   if c:match('^/echo') then print((c:gsub('\a.', ''))) end        -- show chat
   local spell = c:match('^/casting "([^|]+)')
   if spell then                                                   -- a cast
@@ -247,6 +325,18 @@ function mq.cmd(c)
     end
     G.offered[#G.offered + 1] = G.cursor; G.cursor = nil; G.trade = true
   end
+  -- MQRemote: /noparse /rc server <Name> <command> reaches one box.
+  local box, rest = c:match('^/noparse /rc server (%S+) (.+)$')
+  if not box then box, rest = c:match('^/rc server (%S+) (.+)$') end
+  if box and hasRemote(box) then
+    local back = rest:match('^/rc server %S+ (/prov pong .+)$')
+    if back then G.pongs[#G.pongs + 1] = fill(box, back) end      -- answer arrives on the next delay
+    if rest:match('TRDW_Trade_Button') and G.trade and not G.combat then
+      local r = G.recv[G.target] or {}; G.recv[G.target] = r      -- receiver accepts
+      for _, o in ipairs(G.offered) do r[o.name] = (r[o.name] or 0) + o.n end
+      G.offered = {}; G.trade = false
+    end
+  end
   if c:match('^/dex') and G.trade and not G.combat then           -- receiver accepts
     local r = G.recv[G.target] or {}; G.recv[G.target] = r
     for _, o in ipairs(G.offered) do r[o.name] = (r[o.name] or 0) + o.n end
@@ -271,7 +361,14 @@ package.loaded['ImGui'] = {}                                      -- window is n
 _G.ImGuiTableFlags = { Borders = 1, RowBg = 2 }
 
 -- Queue one hand out, then run the real entry point to the end.
-require('provisions.core').request()
+if SCENARIO == 'topup' or SCENARIO == 'check' then               -- Tank already carries some
+  G.recv[2] = { ['Summoned: Black Bread'] = 5, ['Summoned: Globe of Water'] = 3 }
+end
+if SCENARIO == 'check' then
+  require('provisions.core').requestCheck()                       -- Check links button
+else
+  require('provisions.core').request()                            -- Hand Out button
+end
 dofile('provisions/init.lua')
 
 -- Hand the outcome back to Python.
@@ -288,6 +385,7 @@ return {
   gem8 = G.gem8, rgl = table.concat(rgl, ','), casts = castN,
   held_paused = G.holds['Paused'] == true, held_combat = G.holds['Combat hold'] == true,
   trade_open = G.trade, cursor = G.cursor ~= nil,
+  cmds = table.concat(G.cmds, '\n'),
 }
 '''
 
@@ -300,6 +398,13 @@ EXPECTED = {
     'paused':    (7, 3, 7, 3),   # held, resumed, finished
     'combat':    (7, 3, 7, 3),   # held twice, cancelled trade retried, finished
     'busy':      (7, 3, 0, 0),   # Tank served on try 3, Wiz given up
+    'nocaster':  (0, 0, 0, 0),   # no MQRemote here: nothing happens
+    'autoload':  (7, 3, 7, 3),   # MQRemote loaded here, then a normal job
+    'nolink':    (7, 3, 0, 0),   # Wiz left out, Tank served
+    'remoteload': (7, 3, 7, 3),  # MQRemote loaded on Wiz through DanNet
+    'topup':     (2, 0, 7, 3),   # Tank only needed the difference
+    'dannet':    (7, 3, 7, 3),   # old link still works
+    'check':     (5, 3, 0, 0),   # what each box carries, nothing given
 }
 
 
@@ -319,8 +424,14 @@ def write_settings(scenario):
         if os.path.exists(path):
             os.remove(path)                              # start clean
     limit = 1 if scenario == 'neverland' else 20         # summon time limit
-    body = ('return { foodCount = 7, drinkCount = 3, summonTimeoutMin = %d, '
-            'busyRetrySec = 2, selected = { Tank = true, Wiz = true } }\n' % limit)
+    extra = ''                                           # scenario specific settings
+    if scenario == 'topup':
+        extra = ("topUp = true, foodItem = 'Summoned: Black Bread', "
+                 "drinkItem = 'Summoned: Globe of Water', ")
+    if scenario == 'dannet':
+        extra = "acceptMethod = 'dannet', "
+    body = ('return { foodCount = 7, drinkCount = 3, summonTimeoutMin = %d, %s'
+            'busyRetrySec = 2, selected = { Tank = true, Wiz = true } }\n' % (limit, extra))
     path = OLD_FILE if scenario == 'normal' else NEW_FILE   # import check on normal
     with open(path, 'w', encoding='utf-8') as fh:
         fh.write(body)
@@ -350,9 +461,28 @@ def check_extra(scenario, out):
             bad.append('expected hand back and re pause for both fights, got ' + rgl)
         if out['recv_tank'] != 7:
             bad.append('Tank should hold exactly 7 bread, holds %d' % out['recv_tank'])
+    elif scenario in ('nocaster', 'check'):
+        if rgl != '' or out['casts'] != 0:
+            bad.append('should stop before RGMercs or casting, got rgl %s casts %d' % (rgl, out['casts']))
     else:
         if rgl != 'pause,unpause':
             bad.append('RGMercs pause and unpause expected, got ' + rgl)
+    if scenario == 'nolink':
+        if out['wiz_note'] != 'no MQRemote':
+            bad.append('Wiz note should be "no MQRemote", got ' + str(out['wiz_note']))
+        if out['casts'] != 10:
+            bad.append('only Tank\'s 7 + 3 should be summoned, cast %d times' % out['casts'])
+    if scenario == 'check' and (out['tank_note'] != 'carries, link ok' or out['wiz_note'] != 'carries, link ok'):
+        bad.append('both boxes should show "carries, link ok", got %s / %s' % (out['tank_note'], out['wiz_note']))
+    cmds = out['cmds'].split('\n')
+    if scenario == 'autoload' and '/plugin MQRemote load' not in cmds:
+        bad.append('MQRemote should have been loaded with /plugin MQRemote load')
+    if scenario in ('remoteload', 'nolink') and '/dex wiz /plugin MQRemote load' not in cmds:
+        bad.append('MQRemote should have been loaded on Wiz through DanNet')
+    if scenario == 'normal' and any(c.startswith('/plugin MQRemote') or '/plugin MQRemote' in c for c in cmds):
+        bad.append('nothing should be loaded when MQRemote is already up')
+    if scenario == 'topup' and out['recv_tank'] != 7:
+        bad.append('Tank should end with 7 bread, holds %d' % out['recv_tank'])
     if scenario == 'busy':
         if out['wiz_note'] != 'busy, gave up':
             bad.append('Wiz note should be "busy, gave up", got ' + str(out['wiz_note']))

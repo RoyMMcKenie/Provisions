@@ -11,6 +11,76 @@
 
 # Changelog
 
+## 2.2.0 (2026-11-24)
+
+Provisions now loads the link plugin itself.
+
+Why
+
+- The first MQRemote run stopped with "MQRemote is not loaded on this
+  character". Loading a plugin is one documented command, so the script
+  should do it instead of asking you to type it.
+
+New
+
+- Picking a link under Options ("Talk to other boxes via") loads its plugin
+  on the caster if it is not loaded. Starting the script does the same for
+  the saved choice, and so does every hand out and every Check links.
+- It uses `/plugin <name> load`. The MacroQuest docs say this also adds the
+  plugin to `MacroQuest.ini`, so it loads by itself next session. Provisions
+  never unloads it.
+- During the link check, members who do not answer are sent
+  `/plugin MQRemote load` through DanNet (or EQBC) when that plugin is up on
+  the caster. After 4 seconds they are asked again. Only members who still
+  do not answer are left out.
+
+Tests
+
+- dev/smoke_test.py: two new scenarios, autoload (MQRemote missing on the
+  caster) and remoteload (MQRemote missing on a member who has DanNet).
+  nocaster now means MQRemote cannot be loaded at all. 14 scenarios.
+
+## 2.1.0 (2026-11-24)
+
+MQRemote is now the default link between boxes, and every hand out checks
+the link before it spends any mana.
+
+Why
+
+- In the first live test the receiver never pressed Trade. DanNet on one
+  box had picked the ProtonVPN network interface, so the two boxes could
+  not see each other, and the only sign was three timeouts per member
+  after all the summoning was done.
+
+New
+
+- Options: "Talk to other boxes via" MQRemote (new default), DanNet, EQBC
+  or Manual. A choice already saved in your settings file is kept, so an
+  existing install stays on DanNet until you click MQRemote.
+- Link check at the start of every hand out:
+  - Stops with a clear message if the link plugin is not loaded on the
+    caster ("Type /plugin MQRemote ...").
+  - Asks every ticked member to answer. Anyone who does not answer is left
+    out of the job, shown as "no MQRemote" in red, and named in chat with
+    what to type on that character.
+  - If nobody else answers, the job stops before casting anything.
+  - DanNet mode also checks the DanNet peer list and reminds you about
+    `/dnet interface`.
+- Check links button and `/prov check`: runs the link check alone, without
+  summoning, and shows what each member carries.
+- MQRemote round trip: MQRemote only sends commands, so to ask a question
+  the caster sends a command that makes the other box send
+  `/prov pong <token> <name> <combat state> <food> <drink>` back. Only the
+  caster runs Provisions; the other boxes only need MQRemote loaded.
+- Top up and the busy check now work over MQRemote as well as DanNet.
+
+Changed
+
+- Trade accept goes through `/rc server <Name> /notify TradeWnd
+  TRDW_Trade_Button leftmouseup` in MQRemote mode.
+- "Top up only (DanNet)" is now "Top up only".
+- `delivery.queryCount` was replaced by `delivery.probe`.
+
 ## 2.0.0 (2026-11-24)
 
 Renamed from ClericFood to Provisions, because every class that summons
